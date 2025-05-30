@@ -1,0 +1,24 @@
+{
+    "audio": {
+        "sample_rate": 16000,
+        "channels": 1,
+        "device": null,
+        "silence_threshold": 0.01,
+        "silence_duration": 2.0
+    },
+    "model": {
+        "name": "base",
+        "device": "auto",
+        "compute_type": "int8"
+    },
+    "hotkeys": {
+        "toggle_listening": "<ctrl>+<alt>+space",
+        "copy_last": "<ctrl>+<alt>+c",
+        "exit_app": "<ctrl>+<alt>+x"
+    },
+    "ui": {
+        "theme": "system",
+        "show_spectrogram": true,
+        "show_confidence": true
+    }
+}
