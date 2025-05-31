@@ -69,7 +69,7 @@
 
 ## 9. Testing and QA
 
-- [ ] Write unit and integration tests for core features
+- [x] Write unit and integration tests for core features
 - [ ] Test on major Linux distributions (Ubuntu, Fedora, Mint, etc.)
 - [ ] Validate performance on typical consumer hardware
 
