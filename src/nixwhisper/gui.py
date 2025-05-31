@@ -1,14 +1,106 @@
 """GTK-based GUI for NixWhisper."""
 
-import gi
 import logging
 import os
+import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Any, Dict, Tuple, TYPE_CHECKING
 
-gi.require_version('Gdk', '3.0')
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+# Make GTK imports optional
+try:
+    import gi
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # type: ignore
+    GTK_AVAILABLE = True
+except (ImportError, ValueError) as e:
+    GTK_AVAILABLE = False
+    logging.warning(
+        "GTK bindings not available. GUI features will be disabled. "
+        f"Error: {str(e)}"
+    )
+    # Create dummy classes for type checking
+    if TYPE_CHECKING:
+        from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # type: ignore
+    else:
+        class DummyGtk:
+            """Dummy Gtk class when GTK is not available."""
+            class ApplicationWindow: pass
+            class Application:
+                def __init__(self, *args, **kwargs):
+                    self.flags = None
+            class Box: pass
+            class Button: pass
+            class Label: pass
+            class TextView: pass
+            class ToggleButton: pass
+            class Statusbar: pass
+            class ScrolledWindow: pass
+            class AboutDialog: pass
+            class Builder: pass
+            class TextBuffer: pass
+            class TextIter: pass
+            class TextMark: pass
+            class TextTag: pass
+            class TextTagTable: pass
+            class TextChildAnchor: pass
+            class TextMarkAttributes: pass
+            class TextAppearance: pass
+            class TextAttributes: pass
+            class TextBTree: pass
+            class TextChildAnchor: pass
+            class TextMark: pass
+            class TextTag: pass
+            class TextTagTable: pass
+            class TextAppearance: pass
+            class TextAttributes: pass
+            class TextBTree: pass
+            class TextChildAnchor: pass
+            class TextMark: pass
+            class TextTag: pass
+            class TextTagTable: pass
+            class TextAppearance: pass
+            class TextAttributes: pass
+            class TextBTree: pass
+            
+        class DummyGio:
+            """Dummy Gio class when GTK is not available."""
+            class ApplicationFlags:
+                FLAGS_NONE = 0
+                
+        class DummyGLib:
+            """Dummy GLib class when GTK is not available."""
+            class Variant: pass
+            class VariantType: pass
+            
+        class DummyGdk:
+            """Dummy Gdk class when GTK is not available."""
+            class Event: pass
+            class EventButton: pass
+            class EventKey: pass
+            
+        class DummyPango:
+            """Dummy Pango class when GTK is not available."""
+            class Weight:
+                NORMAL = 400
+                BOLD = 700
+                
+        Gtk = DummyGtk()
+        Gio = DummyGio()
+        GLib = DummyGLib()
+        Gdk = DummyGdk()
+        Pango = DummyPango()
+
+        # Also define the application classes that will be used in the module
+        class NixWhisperWindow(Gtk.ApplicationWindow):
+            """Dummy NixWhisperWindow when GTK is not available."""
+            def __init__(self, *args, **kwargs):
+                pass
+                
+        class NixWhisperApp(Gtk.Application):
+            """Dummy NixWhisperApp when GTK is not available."""
+            def __init__(self, *args, **kwargs):
+                pass
 
 from .audio import AudioRecorder
 from .config import Config, load_config
@@ -375,22 +467,44 @@ class NixWhisperApp(Gtk.Application):
         about_dialog.set_website_label("GitHub")
         about_dialog.set_authors(["Your Name"])
         about_dialog.set_comments("A privacy-focused, offline speech-to-text dictation system for Linux")
-        
+
         about_dialog.run()
         about_dialog.destroy()
 
 
-def main(config_path: Optional[str] = None):
+def main(config_path: Optional[str] = None) -> int:
     """Run the NixWhisper application.
-    
+
     Args:
         config_path: Optional path to config file
+
+    Returns:
+        int: Exit code (0 for success, non-zero for error)
     """
     import logging
     logging.basicConfig(level=logging.INFO)
-    
-    app = NixWhisperApp(config_path)
-    return app.run(None)
+
+    try:
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gtk, Gio, Gdk, GLib
+        GTK_AVAILABLE = True
+    except (ImportError, ValueError):
+        GTK_AVAILABLE = False
+
+    if not GTK_AVAILABLE:
+        logging.error(
+            "GTK is not available. The GUI cannot be started. "
+            "Please install PyGObject and GTK bindings for your system."
+        )
+        return 1
+
+    try:
+        app = NixWhisperApp(config_path)
+        return app.run(None)
+    except Exception as e:
+        logging.error(f"Error starting NixWhisper: {e}")
+        return 1
 
 
 if __name__ == "__main__":

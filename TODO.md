@@ -21,14 +21,28 @@
 - [x] Implement audio level monitoring for VU meter
 - [x] Add silence detection for better transcription accuracy
 - [x] Update Pydantic validators to V2 for better type safety and future compatibility
+- [x] Make GUI dependencies (PyGObject, pycairo) optional
+- [x] Implement graceful fallback to CLI when GUI dependencies are missing
+- [x] Add command-line arguments for controlling UI mode and debug output
+- [x] Create a robust CLI interface for non-GUI usage
+- [x] Add proper logging configuration for both CLI and GUI modes
 
 ---
 
-## 3. Model Management
+## 3. Model Management ✅
 
-- [ ] Bundle default OpenWhisper English model
-- [ ] Implement user interface for swapping/importing models
-- [ ] Ensure model files are managed securely and efficiently
+- [x] Bundle the default OpenWhisper English model with the application for a seamless first-run experience
+  - Added automatic model download during installation
+  - Implemented fallback to bundled model if available
+  - Added command-line tool for manual model management
+- [x] Implement model swapping/importing functionality
+  - [x] Add model selection via configuration
+  - [x] Allow loading models from custom paths
+  - [x] Basic model validation
+- [ ] Improve model management
+  - [ ] Add UI for model selection (when GUI is available)
+  - [ ] Add model validation and compatibility checks
+  - [ ] Implement model caching and versioning
 
 ---
 

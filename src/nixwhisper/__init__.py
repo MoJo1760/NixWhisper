@@ -16,6 +16,16 @@ logging.basicConfig(
 # Set up package logger
 logger = logging.getLogger(__name__)
 
+# Check for GUI dependencies
+GUI_AVAILABLE = False
+try:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk
+    GUI_AVAILABLE = True
+except (ImportError, ValueError) as e:
+    logger.debug("GUI dependencies not available: %s", e)
+
 
 __version__ = "0.1.0"
 __author__ = "Your Name"

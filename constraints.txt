@@ -1,0 +1,3 @@
+# PyGObject and pycairo are installed via system packages
+PyGObject>=3.42.0; sys_platform == 'linux'
+pycairo>=1.23.0; sys_platform == 'linux'

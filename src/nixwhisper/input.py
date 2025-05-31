@@ -4,17 +4,38 @@ import logging
 import platform
 import subprocess
 import time
-from typing import Optional, Union
+from typing import Optional, Union, Any, Dict, Tuple, TYPE_CHECKING
 
-import gi
+# Make GTK imports optional
+GTK_AVAILABLE = False
+Gdk: Any = None
+Gtk: Any = None
 
 try:
+    import gi
     gi.require_version('Gdk', '3.0')
     gi.require_version('Gtk', '3.0')
-    from gi.repository import Gdk, Gtk
+    from gi.repository import Gdk, Gtk  # type: ignore
     GTK_AVAILABLE = True
-except (ImportError, ValueError):
-    GTK_AVAILABLE = False
+except (ImportError, ValueError) as e:
+    logging.warning(
+        "GTK bindings not available. Some features may be limited. "
+        f"Error: {str(e)}"
+    )
+    # Create dummy classes for type checking
+    if TYPE_CHECKING:
+        from gi.repository import Gdk, Gtk  # type: ignore
+    else:
+        class DummyGtk:
+            """Dummy Gtk class when GTK is not available."""
+            Selection = type('Selection', (), {'CLIPBOARD': 'clipboard'})
+            
+        class DummyGdk:
+            """Dummy Gdk class when GTK is not available."""
+            SELECTION_CLIPBOARD = 69
+            
+        Gtk = DummyGtk()
+        Gdk = DummyGdk()
 
 
 class TextInputError(Exception):

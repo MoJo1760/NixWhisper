@@ -4,8 +4,9 @@ include CHANGELOG.md
 include CONTRIBUTING.md
 include requirements.txt
 
-# Include package data
+# Include package data and models
 recursive-include src/nixwhisper/data *
+recursive-include src/nixwhisper/models *
 
 # Include documentation
 prune docs/_build

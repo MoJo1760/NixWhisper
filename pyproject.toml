@@ -34,8 +34,6 @@ dependencies = [
     "pynput>=1.7.6",
     "pyperclip>=1.8.2",
     "python-xlib>=0.33; sys_platform == 'linux'",
-    "PyGObject>=3.42.0",
-    "pycairo>=1.23.0",
     "pydantic>=1.10.0",
     "click>=8.1.0",
     "pydub>=0.25.1",
@@ -43,6 +41,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PyGObject>=3.42.0; sys_platform == 'linux'",
+    "pycairo>=1.23.0; sys_platform == 'linux'",
+]
 dev = [
     "black>=23.0.0",
     "flake8>=6.0.0",
@@ -64,6 +66,15 @@ docs = [
 
 [project.scripts]
 nixwhisper = "nixwhisper.__main__:main"
+nixwhisper-download-model = "scripts.download_model:main"
+
+[tool.setuptools.package-data]
+"nixwhisper.models" = ["base.en/*"]
+"scripts" = ["*.py"]
+
+[tool.setuptools.packages.find]
+include = ["nixwhisper*", "scripts"]
+namespaces = true
 
 [project.urls]
 Homepage = "https://github.com/yourusername/nixwhisper"
