@@ -60,6 +60,10 @@ class UIConfig(BaseModel):
     show_confidence: bool = True
     font_family: str = "Sans"
     font_size: int = 12
+    window_width: int = 800
+    window_height: int = 600
+    window_x: Optional[int] = None
+    window_y: Optional[int] = None
 
 
 class Config(BaseModel):

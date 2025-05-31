@@ -14,9 +14,12 @@
 ## 2. Core Speech-to-Text Engine
 
 - [x] Evaluate and select local speech-to-text backend (e.g., Whisper.cpp, faster-whisper)[2][8]
-- [ ] Integrate backend for real-time microphone input[2][8]
-- [ ] Implement basic audio capture and streaming to the model
-- [ ] Parse and output recognized text in real time
+- [x] Integrate backend for real-time microphone input[2][8]
+- [x] Implement basic audio capture and streaming to the model
+- [x] Parse and output recognized text in real time
+- [x] Add proper error handling for audio device access
+- [x] Implement audio level monitoring for VU meter
+- [x] Add silence detection for better transcription accuracy
 
 ---
 
@@ -70,6 +73,10 @@
 ## 9. Testing and QA
 
 - [x] Write unit and integration tests for core features
+- [x] Fix threading issues in microphone input
+- [x] Add end-to-end tests for CLI workflow
+- [x] Test basic GUI functionality
+- [ ] Add more comprehensive GUI tests
 - [ ] Test on major Linux distributions (Ubuntu, Fedora, Mint, etc.)
 - [ ] Validate performance on typical consumer hardware
 
