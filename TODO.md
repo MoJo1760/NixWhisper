@@ -37,13 +37,19 @@
 - [ ] Implement modal GUI overlay with clear “active/listening” feedback
 - [ ] Add visual indicator (e.g., spectrograph) when dictation is active
 - [ ] Ensure GUI can be toggled via keyboard shortcut
+- [ ] Add configuration UI for keyboard shortcuts to toggle transcription
+  - [ ] Allow users to set custom key combinations
+  - [ ] Add validation for key combinations
+  - [ ] Provide visual feedback for shortcut changes
+  - [ ] Ensure shortcuts work globally when application is in background
 
 ---
 
 ## 5. Keyboard Shortcut Activation
 
-- [ ] Implement global hotkey listener to activate/deactivate dictation
+- [x] Implement global hotkey listener to activate/deactivate dictation
 - [ ] Ensure positive feedback (visual/audio) when system is listening
+- [ ] Allow dynamic reconfiguration of keyboard shortcuts through the GUI
 
 ---
 

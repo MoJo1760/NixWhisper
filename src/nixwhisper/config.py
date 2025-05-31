@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class AudioConfig(BaseModel):
@@ -19,8 +19,9 @@ class AudioConfig(BaseModel):
     silence_duration: float = 2.0
     blocksize: int = 1024
 
-    @validator('sample_rate')
-    def validate_sample_rate(cls, v):
+    @field_validator('sample_rate')
+    @classmethod
+    def validate_sample_rate(cls, v: int) -> int:
         if v < 8000 or v > 48000:
             raise ValueError("Sample rate must be between 8000 and 48000")
         return v
@@ -28,21 +29,37 @@ class AudioConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     """Whisper model configuration."""
-    name: str = "base"
+    name: str = "base.en"
     device: str = "auto"
     compute_type: str = "int8"
-    language: Optional[str] = None
+    language: Optional[str] = "en"
     task: str = "transcribe"
     beam_size: int = 5
     best_of: int = 5
     temperature: float = 0.0
-    word_timestamps: bool = False
+    word_timestamps: bool = True
+    download_root: str = Field(
+        default_factory=lambda: str(Path.home() / ".cache" / "nixwhisper" / "models"),
+        description="Directory to store downloaded models"
+    )
 
-    @validator('name')
-    def validate_model_name(cls, v):
-        valid_models = ["tiny", "base", "small", "medium", "large"]
+    @field_validator('name')
+    @classmethod
+    def validate_model_name(cls, v: str) -> str:
+        valid_models = [
+            "tiny.en", "base.en", "small.en", "medium.en",
+            "tiny", "base", "small", "medium", "large"
+        ]
         if v not in valid_models:
             raise ValueError(f"Model must be one of {valid_models}")
+        return v
+        
+    @field_validator('compute_type')
+    @classmethod
+    def validate_compute_type(cls, v: str) -> str:
+        valid_types = ["int8", "int8_float16", "int16", "float16", "float32"]
+        if v not in valid_types:
+            raise ValueError(f"Compute type must be one of {valid_types}")
         return v
 
 
