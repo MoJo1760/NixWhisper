@@ -13,7 +13,7 @@
 
 ## 2. Core Speech-to-Text Engine
 
-- [ ] Evaluate and select local speech-to-text backend (e.g., Whisper.cpp, faster-whisper)[2][8]
+- [x] Evaluate and select local speech-to-text backend (e.g., Whisper.cpp, faster-whisper)[2][8]
 - [ ] Integrate backend for real-time microphone input[2][8]
 - [ ] Implement basic audio capture and streaming to the model
 - [ ] Parse and output recognized text in real time

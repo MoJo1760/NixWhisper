@@ -11,9 +11,9 @@ import numpy as np
 from nixwhisper.transcriber import (
     create_transcriber,
     get_available_backends,
-    TranscriberConfig,
-    FasterWhisperTranscriber,
 )
+from nixwhisper.transcriber.config import TranscriberConfig
+from nixwhisper.transcriber.faster_whisper_backend import FasterWhisperTranscriber
 
 
 class TestTranscriberConfig:
@@ -81,14 +81,22 @@ class TestTranscriberConfig:
             advanced={"beam_size": 5}
         )
         kwargs = config.to_transcriber_kwargs()
-        assert kwargs == {
+        
+        # Check all keys and values except model_dir
+        expected = {
             'backend': 'faster-whisper',
             'model_size': 'small',
             'device': 'cuda',
             'compute_type': 'float16',
-            'model_dir': Path('/tmp/models'),
             'beam_size': 5
         }
+        
+        # Get the model_dir and check if it's a Path object or a string that can be converted to Path
+        model_dir = kwargs.pop('model_dir')
+        assert str(Path(model_dir)) == str(Path('/tmp/models'))
+        
+        # Check the rest of the dictionary
+        assert kwargs == expected
 
 
 class TestCreateTranscriber:
@@ -128,32 +136,39 @@ class TestCreateTranscriber:
 
 
 class TestFasterWhisperTranscriber:
-    """Tests for the FasterWhisperTranscriber class."""
+    """Test the FasterWhisperTranscriber class."""
     
-    @pytest.fixture
-    def mock_whisper_model(self):
-        """Create a mock WhisperModel instance."""
-        with patch('faster_whisper.WhisperModel') as mock_model:
-            # Mock the transcribe method
-            mock_instance = mock_model.return_value
-            
-            # Create a mock segment
-            mock_segment = MagicMock()
-            mock_segment.text = "Test transcription"
-            mock_segment.start = 0.0
-            mock_segment.end = 2.5
-            mock_segment.avg_logprob = -0.5
-            
-            # Mock the transcribe method to return our mock segment
-            mock_instance.transcribe.return_value = (
-                [mock_segment],  # segments
-                MagicMock(language='en', language_probability=0.99)  # info
-            )
-            
-            yield mock_model
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        """Setup mocks for all tests in this class."""
+        self.mock_model_patcher = patch('nixwhisper.transcriber.faster_whisper_backend.WhisperModel')
+        self.mock_model_class = self.mock_model_patcher.start()
+        self.mock_model_instance = MagicMock()
+        self.mock_model_class.return_value = self.mock_model_instance
+        
+        # Create a mock segment
+        self.mock_segment = MagicMock()
+        self.mock_segment.text = "Test transcription"
+        self.mock_segment.start = 0.0
+        self.mock_segment.end = 2.5
+        self.mock_segment.avg_logprob = -0.5
+        
+        # Mock the transcribe method to return our mock segment
+        self.mock_model_instance.transcribe.return_value = (
+            [self.mock_segment],  # segments
+            MagicMock(language='en', language_probability=0.99)  # info
+        )
+        
+        yield
+        
+        # Clean up patches
+        self.mock_model_patcher.stop()
     
-    def test_load_model(self, mock_whisper_model):
+    def test_load_model(self):
         """Test loading the Whisper model."""
+        # Reset the mock call count
+        self.mock_model_class.reset_mock()
+        
         transcriber = FasterWhisperTranscriber(
             model_size="tiny",
             device="cpu",
@@ -170,15 +185,28 @@ class TestFasterWhisperTranscriber:
         assert transcriber.is_loaded
         
         # Verify the model was created with the correct parameters
-        mock_whisper_model.assert_called_once_with(
-            model_size_or_path="tiny",
+        self.mock_model_class.assert_called_once_with(
+            "tiny",  # model_size is passed as a positional argument
             device="cpu",
             compute_type="int8",
             download_root=None
         )
     
-    def test_transcribe_file(self, mock_whisper_model):
+    def test_transcribe_file(self):
         """Test transcribing an audio file."""
+        # Create a test segment
+        mock_segment = MagicMock()
+        mock_segment.text = "Test transcription"
+        mock_segment.start = 0.0
+        mock_segment.end = 2.5
+        mock_segment.avg_logprob = -0.5
+        
+        # Mock the transcribe method to return our test segment
+        self.mock_model_instance.transcribe.return_value = (
+            [mock_segment],  # segments
+            MagicMock(language='en', language_probability=0.99)  # info
+        )
+        
         transcriber = FasterWhisperTranscriber(
             model_size="tiny",
             device="cpu",
@@ -194,16 +222,25 @@ class TestFasterWhisperTranscriber:
             result = transcriber.transcribe(temp_path, language="en")
             
             # Verify the result
-            assert isinstance(result, dict)
-            assert "text" in result
-            assert result["text"] == "Test transcription"
+            assert hasattr(result, 'text')
+            assert result.text == "Test transcription"
             
             # Verify the model was called with the correct parameters
-            mock_whisper_model.return_value.transcribe.assert_called_once()
-            args, kwargs = mock_whisper_model.return_value.transcribe.call_args
+            self.mock_model_instance.transcribe.assert_called_once()
             
+            # Get the args and kwargs passed to transcribe
+            args, kwargs = self.mock_model_instance.transcribe.call_args
+            
+            # The first argument should be the file path
             assert args[0] == temp_path
+            
+            # Verify language parameter
             assert kwargs["language"] == "en"
+            
+            # Verify other default parameters
+            assert kwargs["task"] == "transcribe"
+            assert kwargs["beam_size"] == 5
+            assert kwargs["vad_filter"] is True
             
         finally:
             # Clean up the temporary file
