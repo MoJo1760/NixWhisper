@@ -11,7 +11,7 @@
 
 ---
 
-## 2. Core Speech-to-Text Engine
+## 2. Core Speech-to-Text Engine ✅
 
 - [x] Evaluate and select local speech-to-text backend (e.g., Whisper.cpp, faster-whisper)[2][8]
 - [x] Integrate backend for real-time microphone input[2][8]
@@ -20,6 +20,7 @@
 - [x] Add proper error handling for audio device access
 - [x] Implement audio level monitoring for VU meter
 - [x] Add silence detection for better transcription accuracy
+- [x] Update Pydantic validators to V2 for better type safety and future compatibility
 
 ---
 
@@ -50,6 +51,7 @@
 - [x] Implement global hotkey listener to activate/deactivate dictation
 - [ ] Ensure positive feedback (visual/audio) when system is listening
 - [ ] Allow dynamic reconfiguration of keyboard shortcuts through the GUI
+- [x] Add validation for keyboard shortcut combinations
 
 ---
 
