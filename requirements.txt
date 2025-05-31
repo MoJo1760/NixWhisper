@@ -9,9 +9,7 @@ pyperclip>=1.8.2
 python-xlib>=0.33; sys_platform == 'linux'
 pydantic>=2.0.0,<3.0.0
 click>=8.1.0
-PyQt5>=5.15.0
-PyQt5-Qt5>=5.15.0
-PyQt5-sip>=12.0.0
+PyQt6>=6.4.0
 
 # Audio processing
 pydub>=0.25.1

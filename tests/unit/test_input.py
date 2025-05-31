@@ -182,5 +182,5 @@ def test_parse_hotkey_invalid():
         text_input._parse_hotkey("ctrl+alt+x")  # Missing <>
     
     # Invalid key code
-    with pytest.raises(ValueError, match="Invalid key code"):
-        text_input._parse_hotkey("<abc>")  # Not a number
+    with pytest.raises(ValueError, match="Unknown key: abc"):
+        text_input._parse_hotkey("<abc>")  # Not a valid key

@@ -46,17 +46,17 @@
 
 ---
 
-## 4. Modal GUI Development
+## 4. Qt GUI Development 
 
-- [ ] Design wireframes for modal GUI (spectrograph, status indicators)
-- [ ] Implement modal GUI overlay with clear “active/listening” feedback
-- [ ] Add visual indicator (e.g., spectrograph) when dictation is active
-- [ ] Ensure GUI can be toggled via keyboard shortcut
-- [ ] Add configuration UI for keyboard shortcuts to toggle transcription
-  - [ ] Allow users to set custom key combinations
-  - [ ] Add validation for key combinations
-  - [ ] Provide visual feedback for shortcut changes
-  - [ ] Ensure shortcuts work globally when application is in background
+- [x] Migrated from GTK to Qt for a more modern and maintainable UI
+- [x] Implemented system tray integration with quick access menu
+- [x] Added visual feedback for recording status
+- [x] Implemented settings dialog for configuration
+- [x] Added keyboard shortcut management
+- [x] Ensured clean application lifecycle management
+- [x] Added proper error handling and user feedback
+- [x] Implemented dark/light theme support
+- [x] Added logging and debugging tools
 
 ---
 

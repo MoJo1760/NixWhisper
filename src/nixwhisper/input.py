@@ -1,41 +1,14 @@
 """System-level text input handling for NixWhisper."""
 
+import contextlib
 import logging
 import platform
+import re
 import subprocess
 import time
-from typing import Optional, Union, Any, Dict, Tuple, TYPE_CHECKING
+from typing import Optional, Union, Any, Dict, Tuple, List, TYPE_CHECKING, Iterator
 
-# Make GTK imports optional
-GTK_AVAILABLE = False
-Gdk: Any = None
-Gtk: Any = None
-
-try:
-    import gi
-    gi.require_version('Gdk', '3.0')
-    gi.require_version('Gtk', '3.0')
-    from gi.repository import Gdk, Gtk  # type: ignore
-    GTK_AVAILABLE = True
-except (ImportError, ValueError) as e:
-    logging.warning(
-        "GTK bindings not available. Some features may be limited. "
-        f"Error: {str(e)}"
-    )
-    # Create dummy classes for type checking
-    if TYPE_CHECKING:
-        from gi.repository import Gdk, Gtk  # type: ignore
-    else:
-        class DummyGtk:
-            """Dummy Gtk class when GTK is not available."""
-            Selection = type('Selection', (), {'CLIPBOARD': 'clipboard'})
-            
-        class DummyGdk:
-            """Dummy Gdk class when GTK is not available."""
-            SELECTION_CLIPBOARD = 69
-            
-        Gtk = DummyGtk()
-        Gdk = DummyGdk()
+from pynput import keyboard
 
 
 class TextInputError(Exception):
@@ -44,59 +17,168 @@ class TextInputError(Exception):
 
 
 class TextInput:
-    """Handles system-level text input simulation."""
+    """Handles system-level text input simulation using pynput."""
     
     def __init__(self):
         """Initialize the text input handler."""
-        self.clipboard_backup = None
-        self._init_clipboard()
-    
-    def _init_clipboard(self):
-        """Initialize clipboard handling."""
-        if GTK_AVAILABLE:
-            self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        else:
-            self.clipboard = None
+        self.controller = keyboard.Controller()
     
     def type_text(self, text: str) -> bool:
         """Type text at the current cursor position.
-        
-        This method attempts to use the most reliable method available on the current
-        system to simulate keyboard input.
         
         Args:
             text: Text to type
             
         Returns:
             bool: True if successful, False otherwise
-        """
-        # Try xdotool first (Linux)
-        if self._is_xdotool_available():
-            return self._type_with_xdotool(text)
             
-        # Try GTK next
-        if GTK_AVAILABLE:
-            return self._type_with_gtk(text)
-            
-        # Fall back to clipboard method
-        return self._type_with_clipboard(text)
-    
-    def _is_xdotool_available(self) -> bool:
-        """Check if xdotool is available.
-        
-        Returns:
-            bool: True if xdotool is available
+        Raises:
+            TextInputError: If typing fails
         """
-        try:
-            subprocess.run(
-                ["which", "xdotool"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+        if not text:
             return True
-        except (subprocess.SubprocessError, FileNotFoundError):
-            return False
+            
+        try:
+            self.controller.type(text)
+            return True
+        except Exception as e:
+            raise TextInputError(f"Failed to type text: {str(e)}")
+    
+    @contextlib.contextmanager
+    def press_key_combo(self, *keys: Union[keyboard.Key, str]) -> Iterator[None]:
+        """Context manager for pressing key combinations.
+        
+        Args:
+            *keys: Keys to press simultaneously
+            
+        Yields:
+            None
+        """
+        # Press all keys in order
+        for key in keys:
+            self.controller.press(key)
+        
+        try:
+            yield
+        finally:
+            # Release all keys in reverse order
+            for key in reversed(keys):
+                self.controller.release(key)
+    
+    def _parse_hotkey(self, hotkey_str: str) -> List[Union[keyboard.Key, str]]:
+        """Parse a hotkey string into a list of key objects.
+        
+        Args:
+            hotkey_str: Hotkey string in format "<mod1>+<mod2>+key"
+            
+        Returns:
+            List of key objects
+            
+        Raises:
+            ValueError: If the hotkey string is invalid
+        """
+        if not hotkey_str:
+            raise ValueError("Empty hotkey")
+        
+        # Check for invalid format (modifiers without angle brackets)
+        if any(part in hotkey_str.lower() for part in ['ctrl+', 'alt+', 'shift+', 'cmd+', 'win+', 'super+']):
+            if not all(('<' in part and '>' in part) for part in hotkey_str.split('+') if part.lower() in ['ctrl', 'alt', 'shift', 'cmd', 'win', 'super']):
+                raise ValueError("Invalid hotkey format: modifiers must be in angle brackets (e.g., <ctrl>+a)")
+        
+        # Split the hotkey string into components, preserving case for regular characters
+        parts = [p.strip() for p in hotkey_str.split('+')]
+        
+        keys = []
+        for part in parts:
+            if not part:
+                continue
+                
+            # Handle special keys in angle brackets
+            if part.startswith('<') and part.endswith('>'):
+                key_name = part[1:-1].lower()  # Convert to lowercase for lookup
+                
+                # Check if it's a key code
+                if key_name.isdigit():
+                    keys.append(keyboard.KeyCode.from_vk(int(key_name)))
+                    continue
+                
+                # Map common key names to Key enum
+                key_map = {
+                    'ctrl': keyboard.Key.ctrl,
+                    'control': keyboard.Key.ctrl,
+                    'shift': keyboard.Key.shift,
+                    'alt': keyboard.Key.alt,
+                    'alt_gr': keyboard.Key.alt_gr,
+                    'alt_r': keyboard.Key.alt_r,
+                    'cmd': keyboard.Key.cmd,
+                    'command': keyboard.Key.cmd,
+                    'super': keyboard.Key.cmd,
+                    'win': keyboard.Key.cmd,
+                    'menu': keyboard.Key.menu,
+                    'space': keyboard.Key.space,
+                    'enter': keyboard.Key.enter,
+                    'return': keyboard.Key.enter,
+                    'esc': keyboard.Key.esc,
+                    'escape': keyboard.Key.esc,
+                    'tab': keyboard.Key.tab,
+                    'backspace': keyboard.Key.backspace,
+                    'delete': keyboard.Key.delete,
+                    'insert': keyboard.Key.insert,
+                    'home': keyboard.Key.home,
+                    'end': keyboard.Key.end,
+                    'page_up': keyboard.Key.page_up,
+                    'page_down': keyboard.Key.page_down,
+                    'up': keyboard.Key.up,
+                    'down': keyboard.Key.down,
+                    'left': keyboard.Key.left,
+                    'right': keyboard.Key.right,
+                    'f1': keyboard.Key.f1,
+                    'f2': keyboard.Key.f2,
+                    'f3': keyboard.Key.f3,
+                    'f4': keyboard.Key.f4,
+                    'f5': keyboard.Key.f5,
+                    'f6': keyboard.Key.f6,
+                    'f7': keyboard.Key.f7,
+                    'f8': keyboard.Key.f8,
+                    'f9': keyboard.Key.f9,
+                    'f10': keyboard.Key.f10,
+                    'f11': keyboard.Key.f11,
+                    'f12': keyboard.Key.f12,
+                    'f13': keyboard.Key.f13,
+                    'f14': keyboard.Key.f14,
+                    'f15': keyboard.Key.f15,
+                    'f16': keyboard.Key.f16,
+                    'f17': keyboard.Key.f17,
+                    'f18': keyboard.Key.f18,
+                    'f19': keyboard.Key.f19,
+                    'f20': keyboard.Key.f20,
+                }
+                
+                if key_name in key_map:
+                    keys.append(key_map[key_name])
+                else:
+                    # Try to get the key from the Key enum
+                    try:
+                        key_enum = getattr(keyboard.Key, key_name)
+                        keys.append(key_enum)
+                    except AttributeError:
+                        raise ValueError(f"Unknown key: {key_name}")
+            else:
+                # Regular character - preserve case
+                if len(part) == 1:
+                    keys.append(part)
+                else:
+                    # For multi-character parts, only allow if it's a single character key name
+                    # that was provided without angle brackets
+                    if len(part) == 1:
+                        keys.append(part)
+                    else:
+                        raise ValueError(f"Invalid key format: {part}. Single characters don't need angle brackets.")
+        
+        if not keys:
+            raise ValueError("No valid keys in hotkey")
+            
+        return keys
     
     def _type_with_xdotool(self, text: str) -> bool:
         """Type text using xdotool.

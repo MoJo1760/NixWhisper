@@ -4,7 +4,7 @@
 import argparse
 import logging
 import sys
-from typing import Optional, List
+from typing import Optional, List, Callable, Tuple, Any
 
 def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command line arguments."""
@@ -29,27 +29,43 @@ def setup_logging(debug: bool = False) -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
+def get_qt_gui_handler() -> Tuple[Optional[Callable], str]:
+    """Get the Qt GUI handler if available."""
+    try:
+        from .qt_gui import run_qt_gui
+        from .model_manager import ModelManager
+        
+        def qt_handler():
+            run_qt_gui()
+            return 0
+            
+        return qt_handler, "Qt"
+    except ImportError as e:
+        logging.warning(f"Qt GUI not available: {e}")
+        return None, "Qt"
+
 def main() -> int:
     """Run the NixWhisper application."""
-    args = parse_args()
-    setup_logging(args.debug)
-    
-    logger = logging.getLogger(__name__)
-    
-    # If CLI mode is explicitly requested, skip GUI check
-    if args.cli:
-        logger.info("Starting in CLI mode (--cli flag detected)")
-        from .cli import main as cli_main
-        return cli_main()
-    
-    # Try to import GUI components
     try:
-        from .gui import main as gui_main
-        logger.info("Starting in GUI mode")
-        return gui_main()
-    except ImportError as e:
-        logger.warning("GUI components not available, falling back to CLI mode")
-        logger.debug(f"GUI import error: {e}")
+        args = parse_args()
+        setup_logging(args.debug)
+        
+        logger = logging.getLogger(__name__)
+        
+        # If CLI mode is explicitly requested, skip GUI check
+        if args.cli:
+            logger.info("Starting in CLI mode (--cli flag detected)")
+            from .cli import main as cli_main
+            return cli_main()
+        
+        # Try to use Qt GUI
+        gui_handler, gui_name = get_qt_gui_handler()
+        if gui_handler is not None:
+            logger.info(f"Starting {gui_name} GUI")
+            return gui_handler()
+        
+        # If no GUI is available, fall back to CLI
+        logger.warning("No GUI available, falling back to CLI mode")
         from .cli import main as cli_main
         return cli_main()
     except Exception as e:

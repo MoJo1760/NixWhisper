@@ -2,7 +2,7 @@
 
 ![NixWhisper Logo](data/icons/hicolor/scalable/apps/nixwhisper.svg)
 
-A privacy-focused, offline speech-to-text dictation system for Linux.
+A privacy-focused, offline speech-to-text dictation system for Linux with Qt-based GUI.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -12,7 +12,7 @@ A privacy-focused, offline speech-to-text dictation system for Linux.
 
 - 🎙️ **Real-time, accurate speech-to-text transcription** using OpenWhisper models
 - 🔒 **100% offline processing** - no data leaves your computer
-- 🖥️ **Modern GTK-based GUI** with visual feedback
+- 🖥️ **Modern Qt-based GUI** with visual feedback
 - ⌨️ **Keyboard shortcut activation** for quick dictation
 - 🌐 **Universal typing integration** works in any text input field
 - ⚙️ **Customizable** commands and macros
@@ -27,7 +27,7 @@ A privacy-focused, offline speech-to-text dictation system for Linux.
 - **System Dependencies**:
   - PortAudio (for audio input)
   - FFmpeg (for audio processing)
-  - GTK 3.0 or higher (for the GUI)
+  - Qt 6 (for the modern GUI)
 - **Hardware**:
   - CUDA-capable GPU (recommended for better performance)
   - At least 2GB RAM (4GB+ recommended)
@@ -65,16 +65,13 @@ nixwhisper
        ffmpeg \
        python3-pip \
        python3-venv \
-       libgirepository1.0-dev \
        gcc \
-       libcairo2-dev \
-       pkg-config \
        python3-dev \
-       gir1.2-gtk-3.0 \
-       python3-gi \
-       python3-gi-cairo \
-       gobject-introspection \
-       libglib2.0-dev
+       python3-pyqt6 \
+       python3-pyqt6.qtmultimedia \
+       libportaudio2 \
+       pkg-config \
+       xclip  # For clipboard integration
    
    # On Fedora
    sudo dnf install -y \
@@ -84,12 +81,11 @@ nixwhisper
        python3-virtualenv \
        gcc \
        python3-devel \
-       cairo-gobject-devel \
+       python3-qt6 \
+       python3-qt6-qtmultimedia \
+       portaudio \
        pkg-config \
-       gtk3-devel \
-       gobject-introspection-devel \
-       python3-gobject \
-       pygobject3-devel
+       xclip  # For clipboard integration
    ```
 
 3. **Create and activate a virtual environment**:
@@ -205,7 +201,7 @@ nixwhisper/
 │       ├── audio.py         # Audio capture and processing
 │       ├── cli.py           # Command-line interface
 │       ├── config.py        # Configuration management
-│       ├── gui.py           # GTK-based GUI
+│       ├── qt_gui.py        # Qt-based GUI
 │       ├── input.py         # System input simulation
 │       └── whisper_model.py # Whisper model integration
 ├── tests/                   # Unit tests

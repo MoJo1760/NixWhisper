@@ -218,7 +218,7 @@ class TestFasterWhisperTranscriber:
             temp_path = temp_file.name
         
         try:
-            # Transcribe the file
+            # Test 1: Transcribe using file path
             result = transcriber.transcribe(temp_path, language="en")
             
             # Verify the result
@@ -241,6 +241,28 @@ class TestFasterWhisperTranscriber:
             assert kwargs["task"] == "transcribe"
             assert kwargs["beam_size"] == 5
             assert kwargs["vad_filter"] is True
+            
+            # Reset the mock for the next test
+            self.mock_model_instance.transcribe.reset_mock()
+            
+            # Test 2: Transcribe using raw bytes
+            test_audio_data = b'\x00\x01\x02\x03'  # Dummy audio data
+            result = transcriber.transcribe(test_audio_data, language="es")
+            
+            # Verify the result
+            assert hasattr(result, 'text')
+            assert result.text == "Test transcription"
+            
+            # Get the args and kwargs passed to transcribe
+            args, kwargs = self.mock_model_instance.transcribe.call_args
+            
+            # The first argument should be a numpy array
+            import numpy as np
+            assert isinstance(args[0], np.ndarray)
+            assert args[0].dtype == np.float32
+            
+            # Verify language parameter was updated
+            assert kwargs["language"] == "es"
             
         finally:
             # Clean up the temporary file

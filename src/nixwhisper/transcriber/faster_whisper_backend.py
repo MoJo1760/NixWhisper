@@ -89,14 +89,14 @@ class FasterWhisperTranscriber(BaseTranscriber):
     
     def transcribe(
         self,
-        audio: Union[str, Path, bytes],
+        audio: Union[str, Path, bytes, np.ndarray],
         language: Optional[str] = None,
         **kwargs
     ) -> TranscriptionResult:
         """Transcribe audio to text using Faster-Whisper.
         
         Args:
-            audio: Path to audio file or audio data as bytes
+            audio: Path to audio file, audio data as bytes, or numpy array
             language: Language code (e.g., 'en' for English)
             **kwargs: Additional arguments for the transcriber
             
@@ -106,9 +106,15 @@ class FasterWhisperTranscriber(BaseTranscriber):
         if not self.is_loaded:
             self.load_model()
         
-        # Convert Path objects to strings
+        # Handle different input types
         if isinstance(audio, Path):
             audio = str(audio)
+        elif isinstance(audio, bytes):
+            # Convert bytes to numpy array of float32
+            audio = np.frombuffer(audio, dtype=np.float32)
+            # Reshape to 1D array if it's not already
+            if len(audio.shape) > 1:
+                audio = audio.reshape(-1)
         
         # Set default options
         options = {
