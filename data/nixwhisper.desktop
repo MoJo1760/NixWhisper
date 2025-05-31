@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=NixWhisper
+Comment=Privacy-focused offline speech-to-text for Linux
+Exec=nixwhisper --gui
+Icon=nixwhisper
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;Utility;
+Keywords=speech;dictation;transcription;whisper;offline;
+StartupWMClass=nixwhisper
+X-GNOME-UsesNotifications=true
+X-GNOME-SingleWindow=true

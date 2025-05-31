@@ -2,12 +2,12 @@
 
 ---
 
-## 1. Project Setup
+## 1. Project Setup ✅
 
-- [ ] Create project repository and initialize version control
-- [ ] Set up project structure (src, docs, tests, etc.)
-- [ ] Choose primary programming language and GUI framework (e.g., Rust/C++/Python with GTK/Qt)
-- [ ] Document build and contribution guidelines
+- [x] Create project repository and initialize version control
+- [x] Set up project structure (src, docs, tests, etc.)
+- [x] Choose primary programming language and GUI framework (Python with PyGObject/GTK)
+- [x] Document build and contribution guidelines
 
 ---
 

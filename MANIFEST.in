@@ -1,0 +1,14 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include requirements.txt
+
+# Include package data
+recursive-include src/nixwhisper/data *
+
+# Include documentation
+prune docs/_build
+prune docs/api
+
+global-exclude *.py[cod] __pycache__ *.so .DS_Store

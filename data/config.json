@@ -1,0 +1,33 @@
+{
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "device": null,
+    "silence_threshold": 0.01,
+    "silence_duration": 2.0,
+    "blocksize": 1024
+  },
+  "model": {
+    "name": "base",
+    "device": "auto",
+    "compute_type": "int8",
+    "language": "en",
+    "task": "transcribe",
+    "beam_size": 5,
+    "best_of": 5,
+    "temperature": 0.0,
+    "word_timestamps": false
+  },
+  "hotkeys": {
+    "toggle_listening": "<ctrl>+<alt>+space",
+    "copy_last": "<ctrl>+<alt>+c",
+    "exit_app": "<ctrl>+<alt>+x"
+  },
+  "ui": {
+    "theme": "system",
+    "show_spectrogram": true,
+    "show_confidence": true,
+    "font_family": "Sans",
+    "font_size": 12
+  }
+}
