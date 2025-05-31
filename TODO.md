@@ -48,10 +48,10 @@
 
 ## 4. Qt GUI Development 
 
-- [ ] Design wireframes for modal GUI (spectrograph, status indicators)
-- [ ] Implement modal GUI overlay with clear “active/listening” feedback
-- [ ] Add visual indicator (e.g., spectrograph) when dictation is active
-- [ ] Ensure GUI can be toggled via keyboard shortcut
+- [x] Design wireframes for modal GUI (spectrograph, status indicators)
+- [x] Implement modal GUI overlay with clear “active/listening” feedback
+- [x] Add visual indicator (e.g., spectrograph) when dictation is active
+- [] Ensure GUI can be toggled via keyboard shortcut
 - [ ] Add configuration UI for keyboard shortcuts to toggle transcription
   - [ ] Allow users to set custom key combinations
   - [ ] Add validation for key combinations
