@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton,
     QLabel, QHBoxLayout, QProgressBar, QMessageBox, QSystemTrayIcon, 
     QMenu, QStyle, QGraphicsOpacityEffect, QSizePolicy, QGroupBox,
-    QCheckBox, QSlider
+    QCheckBox, QSlider, QHBoxLayout, QVBoxLayout, QPushButton, QLabel
 )
 from PyQt6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QLinearGradient, QRadialGradient,
@@ -22,6 +22,7 @@ import numpy as np
 from nixwhisper.transcriber import create_transcriber
 from nixwhisper.audio import AudioRecorder
 from nixwhisper.model_manager import ModelManager
+from nixwhisper.universal_typing import UniversalTyping
 
 logger = logging.getLogger(__name__)
 
@@ -804,11 +805,22 @@ class NixWhisperWindow(QMainWindow):
         self.record_button.clicked.connect(self.toggle_recording)
         button_layout.addWidget(self.record_button)
         
+        # Button layout for copy and type actions
+        action_layout = QHBoxLayout()
+        
         # Copy button
         self.copy_button = QPushButton("Copy to Clipboard")
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         self.copy_button.setEnabled(False)
-        button_layout.addWidget(self.copy_button)
+        action_layout.addWidget(self.copy_button)
+        
+        # Type button
+        self.type_button = QPushButton("Type Text")
+        self.type_button.clicked.connect(self.type_text)
+        self.type_button.setEnabled(False)
+        action_layout.addWidget(self.type_button)
+        
+        button_layout.addLayout(action_layout)
         
         layout.addLayout(button_layout)
         
@@ -1014,6 +1026,10 @@ class NixWhisperWindow(QMainWindow):
         if hasattr(self, 'status_label'):
             self.status_label.setText("Transcription complete")
         self.copy_button.setEnabled(True)
+        self.type_button.setEnabled(True)
+        
+        # Automatically type the transcribed text
+        self.type_text()
         
         # Hide overlay after a delay
         QTimer.singleShot(2000, lambda: self.show_overlay(False))
@@ -1039,6 +1055,23 @@ class NixWhisperWindow(QMainWindow):
         text = self.transcription_display.text()
         if text:
             QApplication.clipboard().setText(text)
+            
+    def type_text(self):
+        """Type the transcription text into the active window."""
+        text = self.transcription_display.text()
+        if text:
+            try:
+                # Initialize the universal typer
+                typer = UniversalTyping()
+                # Type the text
+                typer.type_text(text)
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText("Text typed into active window")
+            except Exception as e:
+                error_msg = f"Failed to type text: {str(e)}"
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText(error_msg)
+                logger.error(error_msg, exc_info=True)
             self.status_label.setText("Copied to clipboard")
     
     def closeEvent(self, event):
