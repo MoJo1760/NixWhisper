@@ -19,7 +19,7 @@
 - [x] Parse and output recognized text in real time
 - [x] Add proper error handling for audio device access
 - [x] Implement audio level monitoring for VU meter
-- [x] Add silence detection for better transcription accuracy
+- [x] Add silence detection for better transcription accuracy (automatically stops recording after a period of silence)
 - [x] Update Pydantic validators to V2 for better type safety and future compatibility
 - [x] Make GUI dependencies (PyGObject, pycairo) optional
 - [x] Implement graceful fallback to CLI when GUI dependencies are missing

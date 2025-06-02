@@ -10,7 +10,8 @@ from PyQt6.QtCore import Qt, QTimer, QPointF, QRect, QRectF, QPropertyAnimation,
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton,
     QLabel, QHBoxLayout, QProgressBar, QMessageBox, QSystemTrayIcon, 
-    QMenu, QStyle, QGraphicsOpacityEffect, QSizePolicy
+    QMenu, QStyle, QGraphicsOpacityEffect, QSizePolicy, QGroupBox,
+    QCheckBox, QSlider
 )
 from PyQt6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QLinearGradient, QRadialGradient,
@@ -469,22 +470,27 @@ class RecordingThread(QThread):
     update_level = pyqtSignal(float)  # Normalized audio level (0.0 to 1.0)
     update_spectrum = pyqtSignal(list)  # Frequency spectrum data
     finished = pyqtSignal(bytes)  # Recorded audio data
+    silence_detected = pyqtSignal()  # Signal emitted when silence is detected
     
     # FFT parameters
     FFT_WINDOW_SIZE = 1024
     FFT_HOP_SIZE = 512
     SAMPLE_RATE = 16000
     
-    def __init__(self, sample_rate: int = 16000, channels: int = 1):
+    def __init__(self, sample_rate: int = 16000, channels: int = 1, 
+                 silence_threshold: float = 0.01, silence_duration: float = 2.0):
         super().__init__()
         self.sample_rate = sample_rate
         self.channels = channels
+        self.silence_threshold = silence_threshold
+        self.silence_duration = silence_duration
+        
         self.recorder = AudioRecorder(
             sample_rate=sample_rate,
             channels=channels,
             blocksize=self.FFT_WINDOW_SIZE,
-            silence_threshold=0.01,
-            silence_duration=2.0
+            silence_threshold=silence_threshold,
+            silence_duration=silence_duration
         )
         self.is_recording = False
         self.audio_buffer = np.array([], dtype=np.float32)
@@ -509,6 +515,12 @@ class RecordingThread(QThread):
             
             # Buffer the audio data for transcription
             self.audio_buffer = np.append(self.audio_buffer, audio_data)
+            
+            # Handle silence detection
+            if is_silent and self.is_recording:
+                logger.info("Silence detected, stopping recording")
+                self.silence_detected.emit()
+                self.stop()
             
         except Exception as e:
             logger.error(f"Error in audio callback: {e}", exc_info=True)
@@ -622,6 +634,11 @@ class NixWhisperWindow(QMainWindow):
         self.tray_icon = None
         self.overlay = None
         self.recording_shortcut = None
+        
+        # Silence detection settings
+        self.silence_threshold = 0.01  # Default threshold
+        self.silence_duration = 2.0    # Default duration in seconds
+        self.enable_silence_detection = True  # Default to enabled
         
         # Initialize UI components
         self.init_ui()
@@ -742,6 +759,43 @@ class NixWhisperWindow(QMainWindow):
         """)
         layout.addWidget(self.transcription_display)
         
+        # Silence detection settings
+        silence_group = QGroupBox("Silence Detection")
+        silence_layout = QVBoxLayout()
+        
+        # Enable/disable silence detection
+        self.silence_enable_cb = QCheckBox("Enable silence detection")
+        self.silence_enable_cb.setChecked(self.enable_silence_detection)
+        self.silence_enable_cb.stateChanged.connect(self.toggle_silence_detection)
+        silence_layout.addWidget(self.silence_enable_cb)
+        
+        # Threshold slider
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Sensitivity:"))
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(1, 100)
+        self.threshold_slider.setValue(int(self.silence_threshold * 1000))
+        self.threshold_slider.valueChanged.connect(self.update_silence_threshold)
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(QLabel(f"{self.silence_threshold:.3f}"))
+        self.threshold_value = threshold_layout.itemAt(2).widget()
+        silence_layout.addLayout(threshold_layout)
+        
+        # Duration slider
+        duration_layout = QHBoxLayout()
+        duration_layout.addWidget(QLabel("Duration (s):"))
+        self.duration_slider = QSlider(Qt.Orientation.Horizontal)
+        self.duration_slider.setRange(1, 10)  # 1-10 seconds
+        self.duration_slider.setValue(int(self.silence_duration))
+        self.duration_slider.valueChanged.connect(self.update_silence_duration)
+        duration_layout.addWidget(self.duration_slider)
+        duration_layout.addWidget(QLabel(f"{self.silence_duration:.1f}"))
+        self.duration_value = duration_layout.itemAt(2).widget()
+        silence_layout.addLayout(duration_layout)
+        
+        silence_group.setLayout(silence_layout)
+        layout.addWidget(silence_group)
+        
         # Button layout
         button_layout = QHBoxLayout()
         
@@ -817,15 +871,19 @@ class NixWhisperWindow(QMainWindow):
             logger.warning("Overlay is not initialized")
         
         try:
-            # Start recording in a separate thread
+            # Start recording in a separate thread with current silence detection settings
             logger.debug("Creating recording thread")
-            self.recording_thread = RecordingThread()
+            self.recording_thread = RecordingThread(
+                silence_threshold=self.silence_threshold,
+                silence_duration=self.silence_duration
+            )
             
             # Connect signals
             logger.debug("Connecting signals")
             self.recording_thread.update_level.connect(self.update_level_meter)
             self.recording_thread.update_spectrum.connect(self.update_spectrum)
             self.recording_thread.finished.connect(self.on_recording_finished)
+            self.recording_thread.silence_detected.connect(self.on_silence_detected)
             
             # Start the thread
             logger.debug("Starting recording thread")
@@ -905,6 +963,28 @@ class NixWhisperWindow(QMainWindow):
             
             # Hide the overlay after a short delay
             QTimer.singleShot(1000, lambda: self.show_overlay(False))
+    
+    def on_silence_detected(self):
+        """Handle silence detection event."""
+        logger.info("Silence detected, stopping recording")
+        self.stop_recording()
+        
+    def toggle_silence_detection(self, state):
+        """Toggle silence detection on/off."""
+        self.enable_silence_detection = (state == Qt.CheckState.Checked.value)
+        logger.debug(f"Silence detection {'enabled' if self.enable_silence_detection else 'disabled'}")
+    
+    def update_silence_threshold(self, value):
+        """Update the silence threshold."""
+        self.silence_threshold = value / 1000.0  # Convert from 1-100 to 0.001-0.1
+        self.threshold_value.setText(f"{self.silence_threshold:.3f}")
+        logger.debug(f"Silence threshold updated to {self.silence_threshold}")
+    
+    def update_silence_duration(self, value):
+        """Update the silence duration."""
+        self.silence_duration = value
+        self.duration_value.setText(f"{self.silence_duration:.1f}")
+        logger.debug(f"Silence duration updated to {self.silence_duration}s")
 
     def on_recording_finished(self, audio_data):
         """Handle recording finished event."""
