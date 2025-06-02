@@ -10,7 +10,7 @@ from typing import Optional
 
 from .audio import AudioRecorder
 from .config import Config, load_config
-from .input import TextInput
+from .universal_typing import UniversalTyping
 from .whisper_model import WhisperTranscriber, TranscriptionResult
 
 
@@ -27,7 +27,8 @@ class NixWhisperCLI:
         self.running = True
         self.audio_recorder = None
         self.transcriber = None
-        self.text_input = TextInput()
+        # Initialize universal typing with default preferred methods
+        self.typer = UniversalTyping()
         
         # Set up signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -149,7 +150,7 @@ class NixWhisperCLI:
             
             # Type the text if requested
             if input("\nType this text? (y/N): ").lower() == 'y':
-                self.text_input.type_text(result.text)
+                self.typer.type_text(result.text)
                 print("Text typed.")
             
             print(f"\nTranscribed {len(result.text)} characters in {result.duration:.1f}s")

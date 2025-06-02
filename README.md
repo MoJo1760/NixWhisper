@@ -10,11 +10,21 @@ A privacy-focused, offline speech-to-text dictation system for Linux with Qt-bas
 
 ## 🌟 Features
 
+### Universal Typing
+NixWhisper includes a robust universal typing system that works across different Linux desktop environments:
+- **Multiple Backend Support**: Automatically tries the best available method for your system
+  - `pynput`: Direct input simulation (works in most cases)
+  - `xdotool`: X11-compatible typing (great for X11 environments)
+  - `GTK`: Native typing for Wayland desktops
+  - `Clipboard`: Fallback method that works everywhere
+- **Automatic Fallback**: If one method fails, it will automatically try the next best option
+- **Seamless Integration**: Works in any application's text input field
+
 - 🎙️ **Real-time, accurate speech-to-text transcription** using OpenWhisper models
 - 🔒 **100% offline processing** - no data leaves your computer
 - 🖥️ **Modern Qt-based GUI** with visual feedback
 - ⌨️ **Keyboard shortcut activation** for quick dictation
-- 🌐 **Universal typing integration** works in any text input field
+- 🌐 **Universal typing integration** works in any text input field with multiple fallback methods (pynput, xdotool, GTK, clipboard)
 - ⚙️ **Customizable** commands and macros
 - 🐍 **Python-based** for easy extension and modification
 - 🚀 **Optimized for performance** with support for GPU acceleration
@@ -32,6 +42,23 @@ A privacy-focused, offline speech-to-text dictation system for Linux with Qt-bas
   - CUDA-capable GPU (recommended for better performance)
   - At least 2GB RAM (4GB+ recommended)
   - At least 1GB free disk space for models
+
+## 📋 Dependencies
+
+### System Dependencies
+- **For X11 users**: `xdotool` (for X11 typing support)
+  ```bash
+  # Ubuntu/Debian
+  sudo apt install xdotool
+  
+  # Fedora
+  sudo dnf install xdotool
+  
+  # Arch Linux
+  sudo pacman -S xdotool
+  ```
+
+- **For Wayland users**: GTK and related libraries should already be installed
 
 ## 🚀 Installation
 

@@ -11,6 +11,9 @@ pydantic>=2.0.0,<3.0.0
 click>=8.1.0
 PyQt6>=6.4.0
 
+# Universal typing dependencies
+PyGObject>=3.42.0; sys_platform == 'linux'
+
 # Audio processing
 pydub>=0.25.1
 soundfile>=0.12.1
