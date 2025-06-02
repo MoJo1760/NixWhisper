@@ -2,7 +2,7 @@
 
 ---
 
-## 1. Project Setup ✅
+## 1. Project Setup 
 
 - [x] Create project repository and initialize version control
 - [x] Set up project structure (src, docs, tests, etc.)
@@ -11,7 +11,7 @@
 
 ---
 
-## 2. Core Speech-to-Text Engine ✅
+## 2. Core Speech-to-Text Engine 
 
 - [x] Evaluate and select local speech-to-text backend (e.g., Whisper.cpp, faster-whisper)[2][8]
 - [x] Integrate backend for real-time microphone input[2][8]
@@ -29,7 +29,7 @@
 
 ---
 
-## 3. Model Management ✅
+## 3. Model Management 
 
 - [x] Bundle the default OpenWhisper English model with the application for a seamless first-run experience
   - Added automatic model download during installation
@@ -49,6 +49,16 @@
 ## 4. Qt GUI Development 
 
 - [x] Design wireframes for modal GUI (spectrograph, status indicators)
+- [x] Implement basic Qt GUI framework
+- [x] Add system tray integration
+- [x] Implement recording controls (start/stop)
+- [x] Add audio level visualization
+- [x] Implement global hotkey support (Ctrl+Space)
+  - [x] Basic hotkey registration
+  - [x] Toggle recording with hotkey
+  - [x] Visual feedback for hotkey activation
+  - [x] Error handling for hotkey conflicts
+- [ ] Add settings dialog for hotkey configuration
 - [x] Implement modal GUI overlay with clear “active/listening” feedback
 - [x] Add visual indicator (e.g., spectrograph) when dictation is active
 - [] Ensure GUI can be toggled via keyboard shortcut
@@ -63,13 +73,16 @@
 ## 5. Keyboard Shortcut Activation
 
 - [x] Implement global hotkey listener to activate/deactivate dictation
-- [ ] Ensure positive feedback (visual/audio) when system is listening
-- [ ] Allow dynamic reconfiguration of keyboard shortcuts through the GUI
+- [x] Add option to automatically type after transcription
+- [x] Add hotkey transcription with default SUPER+SPACE
 - [x] Add validation for keyboard shortcut combinations
+- [x] Ensure positive feedback (visual/audio) when system is listening
+- [x] Allow dynamic reconfiguration of keyboard shortcuts through the GUI
+- [x] Add UI for configuring hotkey dynamically
 
 ---
 
-## 6. Universal Typing Integration ✅
+## 6. Universal Typing Integration 
 
 - [x] Implement system-level text injection with multiple methods (pynput, xdotool, GTK, clipboard)
 - [x] Add automatic fallback between typing methods
@@ -81,7 +94,6 @@
 ### Next Steps for Typing Integration:
 - [ ] Add user preferences for typing method priority
 - [ ] Add visual feedback when typing is in progress
-- [x] Add option to automatically type after transcription
 - [ ] Add support for more typing methods (e.g., wtype for Wayland)
 
 ---

@@ -81,6 +81,12 @@ class UIConfig(BaseModel):
     window_height: int = 600
     window_x: Optional[int] = None
     window_y: Optional[int] = None
+    hotkey: str = "Ctrl+Space"  # Changed from SUPER+SPACE to Ctrl+Space for better compatibility
+    
+    # Silence detection settings
+    silence_threshold: float = 0.01  # Default threshold for silence detection
+    silence_duration: float = 2.0    # Default duration in seconds
+    silence_detection: bool = True   # Whether silence detection is enabled
 
 
 class Config(BaseModel):

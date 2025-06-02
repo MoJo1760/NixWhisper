@@ -3,6 +3,9 @@ import logging
 import sys
 import time
 import math
+from typing import Optional
+
+from nixwhisper.config import Config
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Tuple
 
@@ -11,7 +14,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton,
     QLabel, QHBoxLayout, QProgressBar, QMessageBox, QSystemTrayIcon, 
     QMenu, QStyle, QGraphicsOpacityEffect, QSizePolicy, QGroupBox,
-    QCheckBox, QSlider, QHBoxLayout, QVBoxLayout, QPushButton, QLabel
+    QCheckBox, QSlider, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
+    QLineEdit, QDialog, QDialogButtonBox, QDoubleSpinBox
 )
 from PyQt6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QLinearGradient, QRadialGradient,
@@ -575,11 +579,9 @@ class RecordingThread(QThread):
             # Ensure values are in valid range
             fft = np.clip(fft, 0.0, 1.0)
             
-            # Log some debug info (but not too often)
-            if not hasattr(self, 'last_spectrum_log') or time.time() - getattr(self, 'last_spectrum_log', 0) > 5.0:
-                logger.debug(f"Spectrum range: min={np.min(fft):.2f}, max={np.max(fft):.2f}, mean={np.mean(fft):.2f}")
-                self.last_spectrum_log = time.time()
-                
+            # Log some debug info about the spectrum data
+            logger.debug(f"Spectrum range: min={np.min(fft):.2f}, max={np.max(fft):.2f}, mean={np.mean(fft):.2f}")
+            
             # Emit the spectrum data
             self.update_spectrum.emit(fft.tolist())
             
@@ -627,29 +629,188 @@ class RecordingThread(QThread):
 class NixWhisperWindow(QMainWindow):
     """Main application window for NixWhisper."""
     
-    def __init__(self, model_manager: ModelManager):
+    def __init__(self, model_manager: ModelManager, config: Optional[Config] = None):
         super().__init__()
         self.model_manager = model_manager
+        self.config = config or Config()
+        self.is_recording = False
+        self.shortcut = None
+        self.settings_dialog = None  # Store settings dialog reference
         self.recording_thread = None
         self.transcription_thread = None
         self.tray_icon = None
         self.overlay = None
         self.recording_shortcut = None
         
-        # Silence detection settings
-        self.silence_threshold = 0.01  # Default threshold
-        self.silence_duration = 2.0    # Default duration in seconds
-        self.enable_silence_detection = True  # Default to enabled
-        
         # Initialize UI components
+        self.silence_threshold = self.config.ui.silence_threshold
+        self.silence_duration = self.config.ui.silence_duration
+        self.enable_silence_detection = self.config.ui.silence_detection
+        
+        # Initialize peak timer for audio level visualization
+        self._peak_timer = QTimer()
+        self._peak_timer.timeout.connect(self.reset_peak)
+        self._peak_level = 0.0
+        
+        # Initialize UI components first
         self.init_ui()
+        
+        # Then set up the rest
         self.init_tray_icon()
         self.init_overlay()
         self.setup_shortcuts()
         
+        # Initialize recording state
+        self.update_recording_ui()
+        
         # Hide the main window initially
         self.hide()
+    
+    def setup_shortcuts(self):
+        """Set up keyboard shortcuts."""
+        # Remove existing shortcut if it exists
+        if hasattr(self, 'shortcut') and self.shortcut is not None:
+            self.shortcut.activated.disconnect()
+            self.shortcut = None
         
+        # Create new shortcut with a lambda to ensure the return value is handled
+        self.shortcut = QShortcut(
+            QKeySequence(self.config.ui.hotkey),
+            self
+        )
+        # Connect using a lambda to ensure the method is called and its return value is used
+        self.shortcut.activated.connect(lambda: self.toggle_recording())
+    
+    def toggle_recording(self):
+        """Toggle recording on/off.
+        
+        Returns:
+            bool: True if the recording state was toggled, False otherwise
+        """
+        if self.is_recording:
+            return self.stop_recording()
+        else:
+            return self.start_recording()
+    
+    def update_recording_ui(self):
+        """Update the UI to reflect the current recording state."""
+        if hasattr(self, 'status_label'):
+            self.status_label.setText("Recording..." if self.is_recording else "Ready to record")
+    
+    def start_recording(self):
+        """Start recording audio.
+        
+        Returns:
+            bool: True if recording was started, False if already recording
+        """
+        if not self.is_recording:
+            self.is_recording = True
+            
+            # Update UI
+            self.record_button.setText("Stop Recording")
+            self.status_label.setText("Recording...")
+            self.transcription_display.setText("")
+            self.copy_button.setEnabled(False)
+            
+            # Show overlay with recording feedback
+            self.show_overlay(True)
+            if self.overlay:
+                logger.debug("Setting overlay to recording state")
+                self.overlay.set_recording(True)
+            else:
+                logger.warning("Overlay is not initialized")
+            
+            # Initialize and start the recording thread
+            try:
+                logger.debug("Creating recording thread")
+                self.recording_thread = RecordingThread(
+                    sample_rate=16000,
+                    channels=1,
+                    silence_threshold=self.silence_threshold,
+                    silence_duration=self.silence_duration
+                )
+                
+                # Connect signals
+                self.recording_thread.update_level.connect(self.update_audio_level)
+                self.recording_thread.update_spectrum.connect(self.update_spectrum)
+                self.recording_thread.finished.connect(self.on_recording_finished)
+                self.recording_thread.silence_detected.connect(self.on_silence_detected)
+                
+                # Start the thread
+                self.recording_thread.start()
+                logger.info("Recording thread started")
+                
+            except Exception as e:
+                logger.error(f"Error starting recording: {e}", exc_info=True)
+                self.is_recording = False
+                return False
+                
+            logger.info("Recording started")
+            return True
+        return False
+    
+    def stop_recording(self):
+        """Stop the recording thread.
+        
+        Returns:
+            bool: True if recording was stopped, False if not currently recording
+        """
+        if not self.is_recording:
+            return False
+            
+        self.is_recording = False
+        
+        # Update UI
+        if hasattr(self, 'record_button'):
+            self.record_button.setText("Start Recording")
+            self.record_button.setEnabled(True)
+        
+        if hasattr(self, 'status_label'):
+            self.status_label.setText("Processing...")
+        
+        # Update overlay
+        if hasattr(self, 'overlay') and self.overlay:
+            self.overlay.set_recording(False)
+        
+        # Stop the recording thread if it exists and is running
+        if hasattr(self, 'recording_thread') and self.recording_thread is not None:
+            try:
+                logger.debug("Stopping recording thread")
+                if hasattr(self.recording_thread, 'isRunning') and self.recording_thread.isRunning():
+                    # Request the thread to stop
+                    if hasattr(self.recording_thread, 'stop'):
+                        self.recording_thread.stop()
+                    
+                    # Wait for the thread to finish with a timeout
+                    if not self.recording_thread.wait(2000):  # 2 second timeout
+                        logger.warning("Recording thread did not stop gracefully, terminating")
+                        self.recording_thread.terminate()
+                        
+                # Clean up the thread
+                self.recording_thread.quit()
+                self.recording_thread.wait()
+                self.recording_thread.deleteLater()
+                self.recording_thread = None
+                logger.info("Recording thread stopped and cleaned up")
+                
+            except Exception as e:
+                logger.error(f"Error stopping recording thread: {e}", exc_info=True)
+                return False
+                
+        # Update status to ready
+        if hasattr(self, 'status_label'):
+            self.status_label.setText("Ready to record")
+            
+        return True
+        
+        # Hide the overlay after a short delay
+        if hasattr(self, 'show_overlay'):
+            QTimer.singleShot(1000, lambda: self.show_overlay(False))
+        
+        logger.info("Recording stopped")
+        return True
+        return False
+
     def init_overlay(self):
         """Initialize the overlay window."""
         logger.debug("Preparing overlay window...")
@@ -657,10 +818,12 @@ class NixWhisperWindow(QMainWindow):
         
     def setup_shortcuts(self):
         """Set up global keyboard shortcuts."""
-        # Register global shortcut (Ctrl+Alt+Space)
         from PyQt6.QtGui import QKeySequence
+        
+        # Use the configured hotkey from settings
+        hotkey = self.config.ui.hotkey
         self.recording_shortcut = QShortcut(
-            QKeySequence("Ctrl+Alt+Space"),
+            QKeySequence(hotkey),
             self,
             self.toggle_recording
         )
@@ -859,28 +1022,9 @@ class NixWhisperWindow(QMainWindow):
             else:
                 self.show()
     
-    def toggle_recording(self):
-        """Toggle recording on/off."""
-        if self.recording_thread and self.recording_thread.isRunning():
-            self.stop_recording()
-        else:
-            self.start_recording()
+    # The toggle_recording method has been moved above to combine both implementations
     
-    def start_recording(self):
-        """Start recording audio."""
-        logger.debug("Starting recording...")
-        self.record_button.setText("Stop Recording")
-        self.status_label.setText("Recording...")
-        self.transcription_display.setText("")
-        self.copy_button.setEnabled(False)
-        
-        # Show overlay with recording feedback
-        self.show_overlay(True)
-        if self.overlay:
-            logger.debug("Setting overlay to recording state")
-            self.overlay.set_recording(True)
-        else:
-            logger.warning("Overlay is not initialized")
+    # The start_recording method has been moved above to combine both implementations
         
         try:
             # Start recording in a separate thread with current silence detection settings
@@ -958,23 +1102,25 @@ class NixWhisperWindow(QMainWindow):
         self._peak_level = level
         self.update()
     
-    def stop_recording(self):
-        """Stop recording and start transcription."""
-        if self.recording_thread and self.recording_thread.isRunning():
-            # Update the overlay
-            if hasattr(self, 'overlay') and self.overlay:
-                self.overlay.set_recording(False)
-            
-            self.recording_thread.stop()
-            self.record_button.setText("Processing...")
-            self.record_button.setEnabled(False)
-            
-            # Only update status_label if it exists
-            if hasattr(self, 'status_label'):
-                self.status_label.setText("Processing...")
-            
-            # Hide the overlay after a short delay
-            QTimer.singleShot(1000, lambda: self.show_overlay(False))
+    def reset_peak(self):
+        """Reset the peak level for the audio level meter."""
+        self._peak_level = 0.0
+        if hasattr(self, 'overlay') and self.overlay:
+            self.overlay.update()
+    
+    def update_level_meter(self, level):
+        """Update the audio level meter with a new level."""
+        if hasattr(self, '_peak_timer') and self._peak_timer:
+            self._peak_timer.stop()
+            self._peak_timer.start(500)  # Restart the timer
+        self._peak_level = level
+        
+        # Update the overlay if it exists
+        if hasattr(self, 'overlay') and self.overlay:
+            self.overlay.update_audio_level(level)
+        self.update()
+    
+    # The stop_recording method has been moved above to combine both implementations
     
     def on_silence_detected(self):
         """Handle silence detection event."""
@@ -1077,25 +1223,132 @@ class NixWhisperWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event."""
         # Stop any running threads
-        if self.recording_thread and self.recording_thread.isRunning():
-            self.recording_thread.stop()
-            self.recording_thread.wait()
-        
-        if self.transcription_thread and self.transcription_thread.isRunning():
-            self.transcription_thread.quit()
-            self.transcription_thread.wait()
+        if hasattr(self, 'recording_thread') and self.recording_thread is not None:
+            if hasattr(self.recording_thread, 'isRunning') and self.recording_thread.isRunning():
+                self.recording_thread.stop()
+                self.recording_thread.wait()
             
-        # Clean up the overlay
-        if self.overlay:
-            self.overlay.deleteLater()
-            self.overlay = None
+        if hasattr(self, 'transcription_thread') and self.transcription_thread is not None:
+            if hasattr(self.transcription_thread, 'isRunning') and self.transcription_thread.isRunning():
+                self.transcription_thread.quit()
+                self.transcription_thread.wait()
+            
+        # Save window position and size if window is not minimized
+        if not self.isMinimized():
+            self.config.ui.window_width = self.width()
+            self.config.ui.window_height = self.height()
+            self.config.ui.window_x = self.x()
+            self.config.ui.window_y = self.y()
+            
+        # Save config
+        try:
+            from nixwhisper.config import get_default_config_path
+            self.config.save(get_default_config_path())
+        except Exception as e:
+            logger.error(f"Error saving config: {e}")
+
+    def show_settings(self):
+        """Show the settings dialog."""
+        # Store the dialog reference before showing it
+        self.settings_dialog = SettingsDialog(self)
         
-        # Hide the window instead of closing it
-        if self.tray_icon.isVisible():
-            self.hide()
-            event.ignore()
-        else:
-            event.accept()
+        # Show the dialog and wait for it to close
+        result = self.settings_dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            # Get the default config path and save the configuration
+            from nixwhisper.config import get_default_config_path
+            config_path = get_default_config_path()
+            self.config.save(config_path)
+            
+            # Re-initialize shortcuts with new configuration
+            self.setup_shortcuts()
+            
+        # Clear the reference when done
+        self.settings_dialog = None
+
+class SettingsDialog(QDialog):
+    """Dialog for configuring application settings."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("NixWhisper Settings")
+        self.setFixedSize(400, 300)
+        
+        # Store parent window reference for config access
+        self.parent_window = parent
+        
+        layout = QVBoxLayout()
+        
+        # Hotkey configuration
+        hotkey_layout = QHBoxLayout()
+        hotkey_label = QLabel("Hotkey:")
+        self.hotkey_input = QLineEdit(self.parent_window.config.ui.hotkey)
+        hotkey_layout.addWidget(hotkey_label)
+        hotkey_layout.addWidget(self.hotkey_input)
+        layout.addLayout(hotkey_layout)
+        
+        # Silence detection settings
+        silence_layout = QVBoxLayout()
+        
+        # Enable/disable silence detection
+        self.silence_enable_cb = QCheckBox("Enable silence detection")
+        self.silence_enable_cb.setChecked(self.parent_window.config.ui.silence_detection)
+        self.silence_enable_cb.stateChanged.connect(self.toggle_silence_detection)
+        silence_layout.addWidget(self.silence_enable_cb)
+        
+        # Threshold slider
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Sensitivity:"))
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(1, 100)
+        self.threshold_slider.setValue(int(self.parent_window.config.ui.silence_threshold * 1000))
+        self.threshold_slider.valueChanged.connect(self.update_silence_threshold)
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(QLabel(f"{self.parent_window.config.ui.silence_threshold:.3f}"))
+        self.threshold_value = threshold_layout.itemAt(2).widget()
+        silence_layout.addLayout(threshold_layout)
+        
+        # Duration spinbox
+        duration_layout = QHBoxLayout()
+        duration_layout.addWidget(QLabel("Silence duration (s):"))
+        self.duration_spinbox = QDoubleSpinBox()
+        self.duration_spinbox.setRange(0.1, 10.0)
+        self.duration_spinbox.setSingleStep(0.1)
+        self.duration_spinbox.setValue(self.parent_window.config.ui.silence_duration)
+        self.duration_spinbox.valueChanged.connect(self.update_silence_duration)
+        duration_layout.addWidget(self.duration_spinbox)
+        duration_layout.addWidget(QLabel("seconds"))
+        silence_layout.addLayout(duration_layout)
+        
+        silence_group = QGroupBox("Silence Detection")
+        silence_group.setLayout(silence_layout)
+        layout.addWidget(silence_group)
+        
+        # Button box
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        
+        self.setLayout(layout)
+    
+    def toggle_silence_detection(self, state):
+        """Toggle silence detection on/off."""
+        self.parent_window.config.ui.silence_detection = (state == Qt.CheckState.Checked.value)
+        logger.debug(f"Silence detection {'enabled' if self.parent_window.config.ui.silence_detection else 'disabled'}")
+    
+    def update_silence_threshold(self, value):
+        """Update the silence threshold."""
+        self.config.ui.silence_threshold = value / 1000.0  # Convert from 1-100 to 0.001-0.1
+        self.threshold_value.setText(f"{self.config.ui.silence_threshold:.3f}")
+        logger.debug(f"Silence threshold updated to {self.config.ui.silence_threshold}")
+    
+    def update_silence_duration(self, value):
+        """Update the silence duration."""
+        self.config.ui.silence_duration = value
+        self.duration_value.setText(f"{self.config.ui.silence_duration:.1f}")
+        logger.debug(f"Silence duration updated to {self.config.ui.silence_duration}s")
 
 def run_qt_gui():
     """Run the Qt-based GUI."""
