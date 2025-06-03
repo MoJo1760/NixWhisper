@@ -9,18 +9,29 @@ from nixwhisper.config import Config
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Tuple
 
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, pyqtSignal, QThread, QSize
+from PyQt6.QtCore import (
+    Qt, QTimer, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve,
+    pyqtSignal, QThread, QSize, QEvent, QMetaObject
+)
+from evdev import InputDevice, categorize, ecodes, list_devices
+import asyncio
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton,
-    QLabel, QHBoxLayout, QProgressBar, QMessageBox, QSystemTrayIcon, 
-    QMenu, QStyle, QGraphicsOpacityEffect, QSizePolicy, QGroupBox,
-    QCheckBox, QSlider, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QLineEdit, QDialog, QDialogButtonBox, QDoubleSpinBox
+    QLabel, QHBoxLayout, QProgressBar, QMessageBox, QSystemTrayIcon,
+    QMenu, QDialog, QLineEdit, QCheckBox, QSpinBox, QDoubleSpinBox,
+    QFileDialog, QComboBox, QScrollArea, QFrame, QGroupBox,
+    QDialogButtonBox, QStyle, QSizePolicy, QSlider
 )
 from PyQt6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QLinearGradient, QRadialGradient,
-    QPen, QBrush, QPainterPath, QFont, QFontMetrics, QGuiApplication, QShortcut
+    QPen, QBrush, QPainterPath, QFont, QFontMetrics, QGuiApplication, QShortcut,
+    QKeySequence
 )
+from Xlib import X, XK, display
+from Xlib.ext import record
+from Xlib.protocol import rq
+import threading
+import re
 
 import numpy as np
 from nixwhisper.transcriber import create_transcriber
@@ -634,23 +645,42 @@ class NixWhisperWindow(QMainWindow):
         self.model_manager = model_manager
         self.config = config or Config()
         self.is_recording = False
-        self.shortcut = None
+        self._hotkey_thread = None  # Global hotkey thread
+        self._stop_hotkey = False  # Flag to stop hotkey thread
         self.settings_dialog = None  # Store settings dialog reference
         self.recording_thread = None
         self.transcription_thread = None
         self.tray_icon = None
+        self._toggle_recording_lock = threading.Lock()
+        self._recording_signal = threading.Event()
         self.overlay = None
-        self.recording_shortcut = None
+        self.universal_typer = UniversalTyping()  # Create a single instance
         
         # Initialize UI components
         self.silence_threshold = self.config.ui.silence_threshold
         self.silence_duration = self.config.ui.silence_duration
         self.enable_silence_detection = self.config.ui.silence_detection
         
-        # Initialize peak timer for audio level visualization
-        self._peak_timer = QTimer()
-        self._peak_timer.timeout.connect(self.reset_peak)
+        # Initialize peak level
         self._peak_level = 0.0
+        
+        # Define the reset_peak method before setting up the timer
+        def reset_peak():
+            """Reset the peak level for the audio level meter."""
+            try:
+                self._peak_level = 0.0
+                if hasattr(self, 'overlay') and self.overlay and self.overlay.isVisible():
+                    self.overlay.update()
+            except Exception as e:
+                logger.error(f"Error in reset_peak: {e}", exc_info=True)
+        
+        # Store the method reference
+        self.reset_peak = reset_peak
+        
+        # Initialize peak timer for audio level visualization
+        self._peak_timer = QTimer(self)  # Make it a child of the window
+        self._peak_timer.setInterval(500)  # Update every 500ms
+        self._peak_timer.timeout.connect(self.reset_peak)
         
         # Initialize UI components first
         self.init_ui()
@@ -667,224 +697,345 @@ class NixWhisperWindow(QMainWindow):
         self.hide()
     
     def setup_shortcuts(self):
-        """Set up keyboard shortcuts."""
-        # Remove existing shortcut if it exists
-        if hasattr(self, 'shortcut') and self.shortcut is not None:
-            self.shortcut.activated.disconnect()
-            self.shortcut = None
+        """Set up global keyboard shortcuts using evdev."""
+        try:
+            # Kill any existing hotkey thread
+            if self._hotkey_thread and self._hotkey_thread.is_alive():
+                self._stop_hotkey = True
+                self._hotkey_thread.join(timeout=1)
+
+            # Start the hotkey listener thread
+            self._stop_hotkey = False
+            self._hotkey_thread = threading.Thread(
+                target=self._hotkey_listener,
+                args=(self.config.ui.hotkey,),
+                daemon=True
+            )
+            self._hotkey_thread.start()
+            logger.info(f"Started global hotkey listener thread with hotkey: {self.config.ui.hotkey}")
+        except Exception as e:
+            logger.error(f"Error setting up shortcuts: {e}", exc_info=True)
+
+    def _parse_qt_hotkey(self, hotkey):
+        """Parse Qt hotkey format into X11 format."""
+        try:
+            logger.debug(f"Parsing hotkey: {hotkey}")
+            parts = hotkey.split('+')
+            key = parts[-1].lower()
+            modifiers = set(parts[:-1])
+            return key, modifiers
+        except Exception as e:
+            logger.error(f"Error parsing hotkey: {e}")
+            return None, None
+
+    def _hotkey_listener(self, hotkey):
+        """Listen for global hotkeys using evdev."""
+        logger.debug(f"Starting hotkey listener with hotkey: {hotkey}")
         
-        # Create new shortcut with a lambda to ensure the return value is handled
-        self.shortcut = QShortcut(
-            QKeySequence(self.config.ui.hotkey),
-            self
-        )
-        # Connect using a lambda to ensure the method is called and its return value is used
-        self.shortcut.activated.connect(lambda: self.toggle_recording())
+        # Import evdev here to avoid import errors on non-Linux systems
+        try:
+            from evdev import InputDevice, list_devices, ecodes, categorize
+        except ImportError as e:
+            logger.error(f"Failed to import evdev: {e}")
+            return
     
+        try:
+            # Parse Qt hotkey format
+            parts = hotkey.lower().split('+')
+            key = parts[-1]
+            modifiers = set(parts[:-1])
+            
+            # Map modifiers and key to evdev codes
+            modifier_map = {
+                'ctrl': ecodes.KEY_LEFTCTRL,
+                'control': ecodes.KEY_LEFTCTRL,
+                'alt': ecodes.KEY_LEFTALT,
+                'shift': ecodes.KEY_LEFTSHIFT,
+                'meta': ecodes.KEY_LEFTMETA,
+                'super': ecodes.KEY_LEFTMETA
+            }
+            
+            key_map = {
+                'space': ecodes.KEY_SPACE,
+                'return': ecodes.KEY_ENTER,
+                'enter': ecodes.KEY_ENTER,
+                'esc': ecodes.KEY_ESC,
+                'tab': ecodes.KEY_TAB
+            }
+            
+            # Convert modifiers to evdev codes
+            mod_codes = set(modifier_map[mod] for mod in modifiers if mod in modifier_map)
+            
+            # Convert key to evdev code
+            if key in key_map:
+                key_code = key_map[key]
+            else:
+                # Try to find key code by name
+                key_name = f'KEY_{key.upper()}'
+                if hasattr(ecodes, key_name):
+                    key_code = getattr(ecodes, key_name)
+                else:
+                    logger.error(f"Unknown key: {key}")
+                    return
+            
+            # Find all keyboard devices
+            keyboards = [InputDevice(fn) for fn in list_devices()]
+            keyboards = [dev for dev in keyboards if dev.name != 'py-evdev-uinput']
+            
+            if not keyboards:
+                logger.error("No keyboard devices found")
+                return
+                
+            pressed_keys = set()
+            
+            async def read_events():
+                tasks = [handle_device(device) for device in keyboards]
+                await asyncio.gather(*tasks)
+            
+            async def handle_device(device):
+                try:
+                    async for event in device.async_read_loop():
+                        if event.type == ecodes.EV_KEY:
+                            key_event = categorize(event)
+                            
+                            if key_event.keystate == key_event.key_down:
+                                pressed_keys.add(key_event.scancode)
+                                
+                                # Check if hotkey is pressed
+                                if key_event.scancode == key_code and mod_codes.issubset(pressed_keys):
+                                    logger.debug("Hotkey activated!")
+                                    # Schedule toggle_recording in the main thread
+                                    try:
+                                        logger.debug("Posting hotkey event to main thread")
+                                        QApplication.postEvent(
+                                            self,
+                                            QEvent(QEvent.Type.User)
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Error posting event: {e}", exc_info=True)
+                            
+                            elif key_event.keystate == key_event.key_up:
+                                pressed_keys.discard(key_event.scancode)
+                except Exception as e:
+                    logger.error(f"Error reading device {device.name}: {e}")
+            
+            # Run event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            while not self._stop_hotkey:
+                try:
+                    loop.run_until_complete(read_events())
+                except Exception as e:
+                    logger.error(f"Error in event loop: {e}")
+                    time.sleep(0.1)  # Prevent tight loop on error
+            
+            # Cleanup
+            for device in keyboards:
+                try:
+                    device.close()
+                except Exception as e:
+                    logger.error(f"Error closing device {device.name}: {e}")
+            
+            try:
+                loop.close()
+            except Exception as e:
+                logger.error(f"Error closing event loop: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error in hotkey listener: {e}", exc_info=True)
+
     def toggle_recording(self):
-        """Toggle recording on/off.
+        """Toggle recording state.
         
-        Returns:
-            bool: True if the recording state was toggled, False otherwise
+        This method is thread-safe and can be called from any thread.
         """
-        if self.is_recording:
-            return self.stop_recording()
-        else:
-            return self.start_recording()
-    
+        try:
+            with self._toggle_recording_lock:
+                if self.is_recording:
+                    self.stop_recording()
+                else:
+                    self.start_recording()
+        except Exception as e:
+            logger.error(f"Error in toggle_recording: {e}", exc_info=True)
+
     def update_recording_ui(self):
         """Update the UI to reflect the current recording state."""
         if hasattr(self, 'status_label'):
             self.status_label.setText("Recording..." if self.is_recording else "Ready to record")
-    
-    def start_recording(self):
-        """Start recording audio.
-        
-        Returns:
-            bool: True if recording was started, False if already recording
-        """
-        if not self.is_recording:
-            self.is_recording = True
-            
-            # Update UI
-            self.record_button.setText("Stop Recording")
-            self.status_label.setText("Recording...")
-            self.transcription_display.setText("")
-            self.copy_button.setEnabled(False)
-            
-            # Show overlay with recording feedback
-            self.show_overlay(True)
-            if self.overlay:
-                logger.debug("Setting overlay to recording state")
-                self.overlay.set_recording(True)
-            else:
-                logger.warning("Overlay is not initialized")
-            
-            # Initialize and start the recording thread
-            try:
-                logger.debug("Creating recording thread")
-                self.recording_thread = RecordingThread(
-                    sample_rate=16000,
-                    channels=1,
-                    silence_threshold=self.silence_threshold,
-                    silence_duration=self.silence_duration
-                )
-                
-                # Connect signals
-                self.recording_thread.update_level.connect(self.update_audio_level)
-                self.recording_thread.update_spectrum.connect(self.update_spectrum)
-                self.recording_thread.finished.connect(self.on_recording_finished)
-                self.recording_thread.silence_detected.connect(self.on_silence_detected)
-                
-                # Start the thread
-                self.recording_thread.start()
-                logger.info("Recording thread started")
-                
-            except Exception as e:
-                logger.error(f"Error starting recording: {e}", exc_info=True)
-                self.is_recording = False
-                return False
-                
-            logger.info("Recording started")
-            return True
-        return False
-    
-    def stop_recording(self):
-        """Stop the recording thread.
-        
-        Returns:
-            bool: True if recording was stopped, False if not currently recording
-        """
-        if not self.is_recording:
-            return False
-            
-        self.is_recording = False
-        
-        # Update UI
-        if hasattr(self, 'record_button'):
-            self.record_button.setText("Start Recording")
-            self.record_button.setEnabled(True)
-        
-        if hasattr(self, 'status_label'):
-            self.status_label.setText("Processing...")
-        
-        # Update overlay
-        if hasattr(self, 'overlay') and self.overlay:
-            self.overlay.set_recording(False)
-        
-        # Stop the recording thread if it exists and is running
-        if hasattr(self, 'recording_thread') and self.recording_thread is not None:
-            try:
-                logger.debug("Stopping recording thread")
-                if hasattr(self.recording_thread, 'isRunning') and self.recording_thread.isRunning():
-                    # Request the thread to stop
-                    if hasattr(self.recording_thread, 'stop'):
-                        self.recording_thread.stop()
-                    
-                    # Wait for the thread to finish with a timeout
-                    if not self.recording_thread.wait(2000):  # 2 second timeout
-                        logger.warning("Recording thread did not stop gracefully, terminating")
-                        self.recording_thread.terminate()
-                        
-                # Clean up the thread
-                self.recording_thread.quit()
-                self.recording_thread.wait()
-                self.recording_thread.deleteLater()
-                self.recording_thread = None
-                logger.info("Recording thread stopped and cleaned up")
-                
-            except Exception as e:
-                logger.error(f"Error stopping recording thread: {e}", exc_info=True)
-                return False
-                
-        # Update status to ready
-        if hasattr(self, 'status_label'):
-            self.status_label.setText("Ready to record")
-            
-        return True
-        
-        # Hide the overlay after a short delay
-        if hasattr(self, 'show_overlay'):
-            QTimer.singleShot(1000, lambda: self.show_overlay(False))
-        
-        logger.info("Recording stopped")
-        return True
-        return False
 
-    def init_overlay(self):
-        """Initialize the overlay window."""
-        logger.debug("Preparing overlay window...")
-        self.overlay = None  # Will be created when needed during recording
-        
-    def setup_shortcuts(self):
-        """Set up global keyboard shortcuts."""
-        from PyQt6.QtGui import QKeySequence
-        
-        # Use the configured hotkey from settings
-        hotkey = self.config.ui.hotkey
-        self.recording_shortcut = QShortcut(
-            QKeySequence(hotkey),
-            self,
-            self.toggle_recording
-        )
-        
-    def show_overlay(self, show: bool = True):
-        """Show or hide the overlay window."""
-        if show:
-            if not self.overlay:
-                try:
-                    logger.debug("Creating overlay window...")
-                    self.overlay = OverlayWindow()
-                    
-                    # Position the overlay near the system tray icon
-                    screen_geometry = QApplication.primaryScreen().availableGeometry()
-                    overlay_width = 400
-                    overlay_height = 100
-                    
-                    # Get the system tray icon geometry if available
-                    tray_geometry = self.tray_icon.geometry() if self.tray_icon else None
-                    
-                    if tray_geometry and tray_geometry.isValid():
-                        # Position to the left of the tray icon
-                        x = tray_geometry.left() - overlay_width - 10  # 10px padding from tray
-                        y = tray_geometry.top() - overlay_height // 2 + tray_geometry.height() // 2
-                        
-                        # Ensure the overlay stays on screen
-                        if x < screen_geometry.left():
-                            x = screen_geometry.left()
-                        if y + overlay_height > screen_geometry.bottom():
-                            y = screen_geometry.bottom() - overlay_height
-                        if y < screen_geometry.top():
-                            y = screen_geometry.top()
-                    else:
-                        # Fallback to bottom right if tray geometry is not available
-                        x = screen_geometry.right() - overlay_width - 20  # 20px from right
-                        y = screen_geometry.bottom() - overlay_height - 50  # 50px from bottom
-                    
-                    self.overlay.setGeometry(x, y, overlay_width, overlay_height)
-                    logger.debug(f"Overlay window created at ({x}, {y}), size: {overlay_width}x{overlay_height}")
-                except Exception as e:
-                    logger.error(f"Error creating overlay: {e}", exc_info=True)
-                    return
+    def init_ui(self):
+        """Initialize the main window UI components."""
+        try:
+            self.setWindowTitle("NixWhisper")
+            self.setWindowIcon(QIcon.fromTheme("audio-input-microphone"))
             
-            self.overlay.show()
-            self.overlay.raise_()
-            self.overlay.activateWindow()
-        elif self.overlay:
-            self.overlay.hide()
-            # Clean up the overlay when not in use
-            self.overlay.deleteLater()
-            self.overlay = None
+            # Create central widget and layout
+            central_widget = QWidget()
+            self.setCentralWidget(central_widget)
+            layout = QVBoxLayout(central_widget)
+            
+            # Status label
+            self.status_label = QLabel("Ready to record")
+            self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(self.status_label)
+            
+            # Start/Stop button
+            self.record_button = QPushButton("Start Recording (Ctrl+Space)")
+            self.record_button.clicked.connect(self.toggle_recording)
+            layout.addWidget(self.record_button)
+            
+            # Settings button
+            settings_button = QPushButton("Settings")
+            settings_button.clicked.connect(self.show_settings)
+            layout.addWidget(settings_button)
+            
+            # Quit button
+            quit_button = QPushButton("Quit")
+            quit_button.clicked.connect(QApplication.quit)
+            layout.addWidget(quit_button)
+            
+            # Set window size
+            self.resize(400, 200)
+            
+            # Show overlay when starting
+            self.show_overlay(True)
+            
+        except Exception as e:
+            logger.error(f"Error initializing UI: {e}", exc_info=True)
+            raise
+
+    def init_overlay(self, show: bool = False):
+        """Initialize the overlay window.
+        
+        Args:
+            show: If True, show the overlay after initialization
+        """
+        try:
+            # Create overlay if it doesn't exist
+            if not hasattr(self, 'overlay') or not self.overlay:
+                self.overlay = OverlayWindow()
+                logger.debug("Overlay window initialized")
+                
+                # Set initial position but don't show it yet
+                screen_geometry = QApplication.primaryScreen().availableGeometry()
+                overlay_width = 400
+                overlay_height = 100
+                x = screen_geometry.right() - overlay_width - 20  # 20px from right
+                y = screen_geometry.bottom() - overlay_height - 50  # 50px from bottom
+                self.overlay.setGeometry(x, y, overlay_width, overlay_height)
+                
+                # Only show if explicitly requested
+                if show:
+                    self.overlay.show()
+                    self.overlay.raise_()
+                    self.overlay.activateWindow()
+                
+                logger.debug(f"Overlay window initialized at ({x}, {y})")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error initializing overlay: {e}", exc_info=True)
+            return False
+
+    def show_overlay(self, show: bool = True):
+        """Show or hide the overlay window.
+        
+        Args:
+            show: If True, show the overlay. If False, hide it.
+        """
+        try:
+            if show:
+                # Try to initialize overlay if it doesn't exist or is invalid
+                if not hasattr(self, 'overlay') or not self.overlay:
+                    if not self.init_overlay():
+                        logger.warning("Failed to initialize overlay")
+                        return
+                
+                # Ensure the overlay is properly shown
+                try:
+                    if not self.overlay.isVisible():
+                        self.overlay.show()
+                    self.overlay.raise_()
+                    self.overlay.activateWindow()
+                    logger.debug("Overlay shown and activated")
+                except Exception as e:
+                    logger.error(f"Error showing overlay: {e}", exc_info=True)
+                    # Attempt to recreate the overlay
+                    self.overlay = None
+                    if self.init_overlay():
+                        self.overlay.show()
+                        self.overlay.raise_()
+                        self.overlay.activateWindow()
+            
+            elif hasattr(self, 'overlay') and self.overlay:
+                try:
+                    self.overlay.hide()
+                except Exception as e:
+                    logger.error(f"Error hiding overlay: {e}", exc_info=True)
+                finally:
+                    # Clean up the overlay when not in use
+                    try:
+                        self.overlay.deleteLater()
+                    except Exception as e:
+                        logger.error(f"Error cleaning up overlay: {e}", exc_info=True)
+                    self.overlay = None
+        except Exception as e:
+            logger.error(f"Unexpected error in show_overlay: {e}", exc_info=True)
             
     def update_overlay_level(self, level: float):
-        """Update the audio level in the overlay."""
-        if self.overlay and self.overlay.isVisible():
+        """Update the audio level in the overlay.
+        
+        Args:
+            level: The audio level to display (0.0 to 1.0)
+        """
+        try:
+            if not hasattr(self, 'overlay') or not self.overlay:
+                if not self.init_overlay():
+                    logger.debug("Overlay not available for level update")
+                    return
+                    
+            if not self.overlay.isVisible():
+                self.show_overlay(True)
+                
             self.overlay.update_audio_level(level)
             
+        except Exception as e:
+            logger.error(f"Error updating overlay level: {e}", exc_info=True)
+            # Attempt to recover by reinitializing the overlay
+            try:
+                self.overlay = None
+                if self.init_overlay():
+                    self.overlay.update_audio_level(level)
+            except Exception as inner_e:
+                logger.error(f"Failed to recover overlay after level update error: {inner_e}")
+                
     def update_overlay_spectrum(self, spectrum: List[float]):
-        """Update the audio spectrum in the overlay."""
-        if self.overlay and self.overlay.isVisible():
+        """Update the audio spectrum in the overlay.
+        
+        Args:
+            spectrum: List of frequency band levels to display
+        """
+        try:
+            if not hasattr(self, 'overlay') or not self.overlay:
+                if not self.init_overlay():
+                    logger.debug("Overlay not available for spectrum update")
+                    return
+                    
+            if not self.overlay.isVisible():
+                self.show_overlay(True)
+                
             self.overlay.update_spectrum(spectrum)
+            
+        except Exception as e:
+            logger.error(f"Error updating overlay spectrum: {e}", exc_info=True)
+            # Attempt to recover by reinitializing the overlay
+            try:
+                self.overlay = None
+                if self.init_overlay():
+                    self.overlay.update_spectrum(spectrum)
+            except Exception as inner_e:
+                logger.error(f"Failed to recover overlay after spectrum update error: {inner_e}")
     
     def init_ui(self):
         """Initialize the user interface."""
@@ -999,33 +1150,37 @@ class NixWhisperWindow(QMainWindow):
             getattr(QStyle.StandardPixmap, 'SP_MediaPlay')
         ))
         
-        # Create menu
-        tray_menu = QMenu()
-        
-        show_action = QAction("Show", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
-        
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-        tray_menu.addAction(exit_action)
-        
-        self.tray_icon.setContextMenu(tray_menu)
+        # Create tray menu
+        menu = QMenu()
+        menu.addAction("Show/Hide", self.toggle_window)
+        menu.addAction("Start Recording", self.start_recording)
+        menu.addAction("Stop Recording", self.stop_recording)
+        menu.addAction("Settings", self.show_settings)
+        menu.addAction("Quit", self.quit_app)
+        self.tray_icon.setContextMenu(menu)
         self.tray_icon.show()
+        
+        # Handle double click
         self.tray_icon.activated.connect(self.tray_icon_activated)
     
     def tray_icon_activated(self, reason):
         """Handle system tray icon activation."""
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            if self.isVisible():
-                self.hide()
-            else:
-                self.show()
+            self.toggle_window()
     
-    # The toggle_recording method has been moved above to combine both implementations
+    def toggle_window(self):
+        """Toggle window visibility."""
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
     
-    # The start_recording method has been moved above to combine both implementations
-        
+    def quit_app(self):
+        """Quit the application."""
+        self.close()
+    
+    def start_recording(self):
+        """Start recording."""
         try:
             # Start recording in a separate thread with current silence detection settings
             logger.debug("Creating recording thread")
@@ -1094,19 +1249,20 @@ class NixWhisperWindow(QMainWindow):
     
     def update_audio_level(self, level):
         """Update the audio level visualization."""
-        if self._peak_timer:
-            self._peak_timer.stop()
-        self._peak_timer = QTimer()
-        self._peak_timer.timeout.connect(self.reset_peak)
-        self._peak_timer.start(500)
-        self._peak_level = level
-        self.update()
+        try:
+            if hasattr(self, '_peak_timer') and self._peak_timer:
+                self._peak_timer.stop()
+            else:
+                self._peak_timer = QTimer(self)
+                self._peak_timer.timeout.connect(self.reset_peak)
+                
+            self._peak_level = level
+            self._peak_timer.start(500)  # Restart the timer
+            self.update()
+        except Exception as e:
+            logger.error(f"Error in update_audio_level: {e}", exc_info=True)
     
-    def reset_peak(self):
-        """Reset the peak level for the audio level meter."""
-        self._peak_level = 0.0
-        if hasattr(self, 'overlay') and self.overlay:
-            self.overlay.update()
+
     
     def update_level_meter(self, level):
         """Update the audio level meter with a new level."""
@@ -1120,7 +1276,12 @@ class NixWhisperWindow(QMainWindow):
             self.overlay.update_audio_level(level)
         self.update()
     
-    # The stop_recording method has been moved above to combine both implementations
+    def stop_recording(self):
+        """Stop recording."""
+        if self.recording_thread:
+            self.recording_thread.stop()
+            self.recording_thread.wait()
+            self.recording_thread = None
     
     def on_silence_detected(self):
         """Handle silence detection event."""
@@ -1146,25 +1307,47 @@ class NixWhisperWindow(QMainWindow):
 
     def on_recording_finished(self, audio_data):
         """Handle recording finished event."""
-        self.record_button.setText("Start Recording")
-        self.record_button.setEnabled(True)
-        
-        if not audio_data:
-            error_msg = "Recording failed - no audio data"
+        try:
+            # Clean up the recording thread
+            if self.recording_thread:
+                if self.recording_thread.isRunning():
+                    self.recording_thread.wait(1000)  # Wait up to 1 second
+                self.recording_thread = None
+                
+            # Update UI
+            self.record_button.setText("Start Recording")
+            self.record_button.setEnabled(True)
+            
+            if not audio_data:
+                error_msg = "Recording failed - no audio data"
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText(error_msg)
+                QTimer.singleShot(2000, lambda: self.show_overlay(False))
+                return
+            
+            # Start transcription in a separate thread
+            self.transcription_thread = TranscriptionThread(audio_data, self.model_manager)
+            self.transcription_thread.finished.connect(self.on_transcription_finished)
+            self.transcription_thread.error.connect(self.on_transcription_error)
+            self.transcription_thread.finished.connect(self.cleanup_transcription_thread)
+            self.transcription_thread.start()
+            
+            # Update status if status_label exists
             if hasattr(self, 'status_label'):
-                self.status_label.setText(error_msg)
+                self.status_label.setText("Transcribing...")
+                
+        except Exception as e:
+            logger.error(f"Error in on_recording_finished: {e}", exc_info=True)
+            if hasattr(self, 'status_label'):
+                self.status_label.setText("Error processing recording")
             QTimer.singleShot(2000, lambda: self.show_overlay(False))
-            return
-        
-        # Start transcription in a separate thread
-        self.transcription_thread = TranscriptionThread(audio_data, self.model_manager)
-        self.transcription_thread.finished.connect(self.on_transcription_finished)
-        self.transcription_thread.error.connect(self.on_transcription_error)
-        self.transcription_thread.start()
-        
-        # Update status if status_label exists
-        if hasattr(self, 'status_label'):
-            self.status_label.setText("Transcribing...")
+    
+    def cleanup_transcription_thread(self):
+        """Clean up the transcription thread."""
+        if self.transcription_thread:
+            if self.transcription_thread.isRunning():
+                self.transcription_thread.wait(1000)  # Wait up to 1 second
+            self.transcription_thread = None
     
     def on_transcription_finished(self, text):
         """Handle transcription finished event."""
@@ -1205,20 +1388,23 @@ class NixWhisperWindow(QMainWindow):
     def type_text(self):
         """Type the transcription text into the active window."""
         text = self.transcription_display.text()
-        if text:
-            try:
-                # Initialize the universal typer
-                typer = UniversalTyping()
-                # Type the text
-                typer.type_text(text)
+        if not text:
+            return
+            
+        try:
+            if hasattr(self, 'universal_typer') and self.universal_typer:
+                self.universal_typer.type_text(text)
                 if hasattr(self, 'status_label'):
                     self.status_label.setText("Text typed into active window")
-            except Exception as e:
-                error_msg = f"Failed to type text: {str(e)}"
+            else:
+                logger.error("UniversalTyping instance not available")
                 if hasattr(self, 'status_label'):
-                    self.status_label.setText(error_msg)
-                logger.error(error_msg, exc_info=True)
-            self.status_label.setText("Copied to clipboard")
+                    self.status_label.setText("Error: Typing service not available")
+        except Exception as e:
+            error_msg = f"Failed to type text: {str(e)}"
+            if hasattr(self, 'status_label'):
+                self.status_label.setText(error_msg)
+            logger.error(error_msg, exc_info=True)
     
     def closeEvent(self, event):
         """Handle window close event."""
@@ -1227,25 +1413,46 @@ class NixWhisperWindow(QMainWindow):
             if hasattr(self.recording_thread, 'isRunning') and self.recording_thread.isRunning():
                 self.recording_thread.stop()
                 self.recording_thread.wait()
-            
+        
         if hasattr(self, 'transcription_thread') and self.transcription_thread is not None:
             if hasattr(self.transcription_thread, 'isRunning') and self.transcription_thread.isRunning():
-                self.transcription_thread.quit()
                 self.transcription_thread.wait()
-            
+        
+        # Clean up global hotkey
+        if hasattr(self, '_hotkey_thread') and self._hotkey_thread is not None:
+            self._stop_hotkey = True
+            self._hotkey_thread.join()
+            self._hotkey_thread = None
+        
+        # Hide to tray instead of closing
+        event.ignore()
+        self.hide()
+        
         # Save window position and size if window is not minimized
         if not self.isMinimized():
             self.config.ui.window_width = self.width()
             self.config.ui.window_height = self.height()
             self.config.ui.window_x = self.x()
             self.config.ui.window_y = self.y()
-            
+        
         # Save config
         try:
-            from nixwhisper.config import get_default_config_path
-            self.config.save(get_default_config_path())
+            self.config.save()
         except Exception as e:
-            logger.error(f"Error saving config: {e}")
+            logger.error(f"Failed to save config: {e}")
+
+    def event(self, event):
+        """Handle custom events."""
+        if event.type() == QEvent.Type.User:
+            # Handle global hotkey event
+            try:
+                logger.debug("Processing hotkey event from global hotkey")
+                # Use a singleShot timer to ensure we're in the main thread
+                QTimer.singleShot(0, self.toggle_recording)
+            except Exception as e:
+                logger.error(f"Error in hotkey event handler: {e}", exc_info=True)
+            return True
+        return super().event(event)
 
     def show_settings(self):
         """Show the settings dialog."""
@@ -1281,12 +1488,31 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout()
         
         # Hotkey configuration
-        hotkey_layout = QHBoxLayout()
-        hotkey_label = QLabel("Hotkey:")
+        hotkey_group = QGroupBox("Global Hotkey")
+        hotkey_layout = QVBoxLayout()
+        
+        # Main hotkey input
+        hotkey_input_layout = QHBoxLayout()
+        hotkey_label = QLabel("Shortcut:")
         self.hotkey_input = QLineEdit(self.parent_window.config.ui.hotkey)
-        hotkey_layout.addWidget(hotkey_label)
-        hotkey_layout.addWidget(self.hotkey_input)
-        layout.addLayout(hotkey_layout)
+        self.hotkey_input.setPlaceholderText("Click and press keys...")
+        self.hotkey_input.setReadOnly(True)
+        self.hotkey_input.installEventFilter(self)
+        self.hotkey_status = QLabel()
+        self.hotkey_status.setStyleSheet("color: gray;")
+        hotkey_input_layout.addWidget(hotkey_label)
+        hotkey_input_layout.addWidget(self.hotkey_input)
+        hotkey_input_layout.addWidget(self.hotkey_status)
+        hotkey_layout.addLayout(hotkey_input_layout)
+        
+        # Help text
+        help_text = QLabel("Click the input field and press your desired key combination.\nThe hotkey will work globally even when the app is in background.")
+        help_text.setWordWrap(True)
+        help_text.setStyleSheet("color: gray; font-size: 10pt;")
+        hotkey_layout.addWidget(help_text)
+        
+        hotkey_group.setLayout(hotkey_layout)
+        layout.addWidget(hotkey_group)
         
         # Silence detection settings
         silence_layout = QVBoxLayout()
@@ -1349,6 +1575,72 @@ class SettingsDialog(QDialog):
         self.config.ui.silence_duration = value
         self.duration_value.setText(f"{self.config.ui.silence_duration:.1f}")
         logger.debug(f"Silence duration updated to {self.config.ui.silence_duration}s")
+        
+    def eventFilter(self, obj, event) -> bool:
+        """Handle hotkey input events."""
+        if obj == self.hotkey_input:
+            if event.type() == QEvent.Type.KeyPress:
+                # Get the key sequence
+                key = event.key()
+                modifiers = event.modifiers()
+                
+                logger.debug(f"Hotkey input - key: {key}, modifiers: {modifiers}")
+                
+                # Skip modifier-only key events
+                if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                    return True
+                
+                # Build the key sequence
+                key_seq = []
+                if modifiers & Qt.KeyboardModifier.ControlModifier:
+                    key_seq.append('Ctrl')
+                if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    key_seq.append('Shift')
+                if modifiers & Qt.KeyboardModifier.AltModifier:
+                    key_seq.append('Alt')
+                if modifiers & Qt.KeyboardModifier.MetaModifier:
+                    key_seq.append('Meta')
+                
+                # Add the main key
+                key_text = QKeySequence(key).toString()
+                if key_text:
+                    key_seq.append(key_text)
+                
+                logger.debug(f"Key sequence: {key_seq}")
+                
+                # Build the final key sequence
+                hotkey = '+'.join(key_seq)
+                logger.debug(f"Final hotkey: {hotkey}")
+                
+                # Validate the hotkey
+                if len(key_seq) < 2:
+                    self.hotkey_status.setText('❌ Add at least one modifier (Ctrl, Alt, etc.)')
+                    self.hotkey_status.setStyleSheet('color: red;')
+                    return True
+                
+                # Update the input field and config
+                self.hotkey_input.setText(hotkey)
+                self.parent_window.config.ui.hotkey = hotkey
+                self.hotkey_status.setText('✓ Valid shortcut')
+                self.hotkey_status.setStyleSheet('color: green;')
+                
+                # Update parent's shortcuts
+                logger.debug("Updating parent's shortcuts")
+                self.parent_window.setup_shortcuts()
+                
+                return True
+            
+            elif event.type() == QEvent.Type.FocusIn:
+                self.hotkey_status.setText('🔵 Press your desired key combination')
+                self.hotkey_status.setStyleSheet('color: blue;')
+                return False
+            
+            elif event.type() == QEvent.Type.FocusOut:
+                if not self.hotkey_input.text():
+                    self.hotkey_status.setText('')
+                return False
+        
+        return super().eventFilter(obj, event)
 
 def run_qt_gui():
     """Run the Qt-based GUI."""
