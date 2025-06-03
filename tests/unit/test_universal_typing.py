@@ -23,9 +23,9 @@ class TestUniversalTyping(TestCase):
 
         # Create patches for all external dependencies
         self.patches = [
-            patch('nixwhisper.universal_typing.Controller'),
-            patch('nixwhisper.universal_typing.QApplication'),
-            patch('nixwhisper.universal_typing.QClipboard'),
+            patch('pynput.keyboard.Controller'),
+            patch('PyQt5.QtWidgets.QApplication'),
+            patch('PyQt5.QtGui.QClipboard'),
             patch('nixwhisper.universal_typing.subprocess')
         ]
 
@@ -161,6 +161,7 @@ class TestUniversalTyping(TestCase):
                 "All typing methods failed"
             )
 
+    @patch('nixwhisper.universal_typing.QT_AVAILABLE', False)
     def test_type_text_clipboard_failure(self):
         """Test clipboard fallback failure when Qt is not available.
 
@@ -176,33 +177,37 @@ class TestUniversalTyping(TestCase):
         self.assertEqual(str(context.exception), "Clipboard not available")
 
     @patch('nixwhisper.universal_typing.QT_AVAILABLE', True)
-    @patch('PyQt5.QtWidgets.QApplication')
-    def test_type_text_with_clipboard(self, mock_qapp):
+    @patch('nixwhisper.universal_typing.PYNPROMPT_AVAILABLE', False)
+    @patch('nixwhisper.universal_typing.QApplication')
+    @patch('nixwhisper.universal_typing.QClipboard')
+    def test_type_text_with_clipboard(self, mock_clipboard_class, mock_qapp, *_):
         """Test typing text using clipboard method."""
         # Create a mock clipboard
         mock_clipboard = MagicMock()
-        mock_qapp.instance.return_value.clipboard.return_value = mock_clipboard
+        mock_clipboard.text.return_value = ""
+        # Set up QApplication
+        mock_qapp.processEvents = MagicMock()
+        # Set up the clipboard mode
+        mock_clipboard_class.Clipboard = 0
         # Create a new instance with the mocked QApplication
         typer = UniversalTyping()
+        typer.qt_clipboard = mock_clipboard
         # Test with clipboard method
-        with patch.object(typer, '_type_with_clipboard', return_value=True) as mock_clip:
-            text = "test clipboard"
-            result = typer.type_text(text, "clipboard")
-            self.assertTrue(result)
-            mock_clip.assert_called_once_with(text)
-        with patch.object(self.typer, '_type_with_pynput',
+        text = "test clipboard"
+        result = typer.type_text(text, "clipboard")
+        self.assertTrue(result)
+        mock_clipboard.setText.assert_any_call(text, 0)
+        # Test fallback
+        with patch.object(typer, '_type_with_pynput',
                         side_effect=UniversalTypingError("pynput failed")), \
-            patch.object(self.typer, '_type_with_xdotool',
-                        side_effect=UniversalTypingError("xdotool failed")), \
-            patch.object(self.typer, '_type_with_clipboard',
-                        return_value=True) as mock_clipboard:
+            patch.object(typer, '_type_with_xdotool',
+                        side_effect=UniversalTypingError("xdotool failed")):
             # Test
             text = "Fallback test"
-            result = self.typer.type_text(text)
-            # Verify the call worked (clipboard should have succeeded)
+            result = typer.type_text(text)
             self.assertTrue(result)
             # Verify clipboard was called as fallback
-            mock_clipboard.assert_called_once_with(text)
+            mock_clipboard.setText.assert_any_call(text, 0)
 
     @patch('nixwhisper.universal_typing.QT_AVAILABLE', True)
     @patch('PyQt5.QtWidgets.QApplication')

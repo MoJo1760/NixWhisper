@@ -1,17 +1,15 @@
 """Test configuration and fixtures for NixWhisper."""
 
-import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, Generator, List, Optional, Union
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import soundfile as sf
-from pynput import keyboard
 
 from nixwhisper.config import Config, AudioConfig, ModelConfig, HotkeyConfig, UIConfig
 from nixwhisper.whisper_model import TranscriptionResult, TranscriptionSegment
@@ -42,7 +40,7 @@ def test_data_dir() -> Path:
 
 
 @pytest.fixture(scope="session")
-def temp_dir() -> Generator[Path, None, None]:
+def create_temp_dir() -> Generator[Path, None, None]:
     """Create and return a temporary directory for testing."""
     temp_dir = tempfile.mkdtemp(prefix="nixwhisper-test-")
     try:
@@ -99,7 +97,6 @@ def mock_audio_file(test_data_dir: Path) -> Path:
         t = np.linspace(0, duration, int(rate * duration), endpoint=False)
         audio_data = np.sin(2 * np.pi * 440 * t) * 0.1  # 440 Hz sine wave at low volume
         sf.write(str(audio_file), audio_data, rate)
-    
     return audio_file
 
 
@@ -115,22 +112,21 @@ def short_audio_data() -> np.ndarray:
 @pytest.fixture
 def mock_transcription_result() -> TranscriptionResult:
     """Create a mock transcription result for testing."""
+    segment = TranscriptionSegment(
+        start=0.0,
+        end=2.5,
+        text="This is a test transcription."
+    )
+    segment.index = 0
+    segment.tokens = []
+    segment.temperature = 0.0
+    segment.avg_logprob = 0.0
+    segment.compression_ratio = 0.0
+    segment.no_speech_prob = 0.0
     return TranscriptionResult(
         text="This is a test transcription.",
         language="en",
-        segments=[
-            TranscriptionSegment(
-                id=0,
-                start=0.0,
-                end=2.5,
-                text="This is a test transcription.",
-                tokens=[],
-                temperature=0.0,
-                avg_logprob=0.0,
-                compression_ratio=0.0,
-                no_speech_prob=0.0,
-            )
-        ]
+        segments=[segment]
     )
 
 
@@ -140,15 +136,12 @@ def mock_whisper_model():
     with patch('nixwhisper.whisper_model.WhisperTranscriber') as mock_transcriber:
         mock_model = MagicMock()
         mock_transcriber.return_value = mock_model
-        
-        # Set up a default transcription result
         mock_result = TranscriptionResult(
             text="This is a test transcription.",
             language="en",
             segments=[]
         )
         mock_model.transcribe.return_value = mock_result
-        
         yield mock_model
 
 

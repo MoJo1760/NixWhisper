@@ -141,7 +141,10 @@ class UniversalTyping:
     def _type_with_xdotool(self, text: str) -> bool:
         """Type text using xdotool."""
         from .utils.shell import type_text_xdotool
-        return type_text_xdotool(text)
+        try:
+            return type_text_xdotool(text)
+        except Exception as e:
+            raise UniversalTypingError(f"xdotool failed: {e}")
     
     def _type_with_clipboard(self, text: str) -> bool:
         """Type text using clipboard fallback."""
@@ -160,7 +163,7 @@ class UniversalTyping:
             QApplication.processEvents()
             
             # Simulate paste (Ctrl+V) using pynput if available
-            if PYNPROMPT_AVAILABLE:
+            if PYNPROMPT_AVAILABLE and self.pynput_controller is not None:
                 with self.pynput_controller.pressed(keyboard.Key.ctrl):
                     self.pynput_controller.press('v')
                     self.pynput_controller.release('v')

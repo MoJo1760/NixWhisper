@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional, Dict, Any, Union
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from ..transcriber import get_available_backends, create_transcriber
 
 
@@ -45,8 +45,9 @@ class TranscriberConfig(BaseModel):
         description="Advanced backend-specific settings"
     )
     
-    @validator('backend')
-    def validate_backend(self, v):
+    @field_validator('backend')
+    @classmethod
+    def validate_backend(cls, v: str) -> str:
         """Validate that the specified backend is available."""
         available_backends = get_available_backends()
 
@@ -57,24 +58,27 @@ class TranscriberConfig(BaseModel):
             )
         return v
 
-    @validator('device')
-    def validate_device(self, v):
+    @field_validator('device')
+    @classmethod
+    def validate_device(cls, v: str) -> str:
         """Validate device setting."""
         v = v.lower()
         if v not in ('cpu', 'cuda', 'auto'):
             raise ValueError("Device must be one of: cpu, cuda, auto")
         return v
 
-    @validator('compute_type')
-    def validate_compute_type(self, v):
+    @field_validator('compute_type')
+    @classmethod
+    def validate_compute_type(cls, v: str) -> str:
         """Validate compute type setting."""
         v = v.lower()
         if v not in ('int8', 'float16', 'float32'):
             raise ValueError("Compute type must be one of: int8, float16, float32")
         return v
 
-    @validator('model_size')
-    def validate_model_size(self, v):
+    @field_validator('model_size')
+    @classmethod
+    def validate_model_size(cls, v: str) -> str:
         """Validate model size setting."""
         v = v.lower()
         valid_sizes = ('tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3')
