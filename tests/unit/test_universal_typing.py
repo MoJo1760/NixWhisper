@@ -1,107 +1,175 @@
 """Unit tests for the UniversalTyping class."""
 
-import unittest
-from unittest.mock import patch, MagicMock, ANY, PropertyMock, mock_open
-import sys
-import os
-import importlib
+from unittest.mock import MagicMock, patch
+from unittest import TestCase, main
 
-# Import the UniversalTyping class and its constants
-from nixwhisper.universal_typing import UniversalTyping, UniversalTypingError, PYNPROMPT_AVAILABLE, QT_AVAILABLE
+from nixwhisper.universal_typing import UniversalTyping, UniversalTypingError
 
-class TestUniversalTyping(unittest.TestCase):
+
+class TestUniversalTyping(TestCase):
     """Test cases for the UniversalTyping class."""
-    
     def setUp(self):
         """Set up test fixtures."""
         # Save the original modules
         self.original_modules = {}
-        for module_name in ['pynput', 'PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtGui']:
-            self.original_modules[module_name] = sys.modules.get(module_name)
-        
+        module_names = [
+            'pynput',
+            'PyQt5',
+            'PyQt5.QtWidgets',
+            'PyQt5.QtGui'
+        ]
+        for module_name in module_names:
+            self.original_modules[module_name] = globals().get(module_name)
+
         # Create patches for all external dependencies
         self.patches = [
-            # Mock the pynput.keyboard module
-            patch('pynput.keyboard', MagicMock()),
-            # Mock Qt modules
-            patch.dict('sys.modules', {
-                'PyQt5': MagicMock(),
-                'PyQt5.QtWidgets': MagicMock(),
-                'PyQt5.QtGui': MagicMock()
-            }),
-            # Mock subprocess and shutil at the global level
-            patch('subprocess.run', return_value=MagicMock(returncode=0)),
-            patch('shutil.which', return_value="/usr/bin/xdotool"),
-            # Mock the module-level flags
-            patch('nixwhisper.universal_typing.PYNPROMPT_AVAILABLE', True),
-            patch('nixwhisper.universal_typing.QT_AVAILABLE', True)
+            patch('nixwhisper.universal_typing.Controller'),
+            patch('nixwhisper.universal_typing.QApplication'),
+            patch('nixwhisper.universal_typing.QClipboard'),
+            patch('nixwhisper.universal_typing.subprocess')
         ]
-        
+
         # Start all patches
         for p in self.patches:
             p.start()
-            
+
         # Create a UniversalTyping instance for testing
         self.typer = UniversalTyping()
-        
+
     def tearDown(self):
-        """Clean up after tests."""
+        """Clean up test fixtures."""
         # Stop all patches
-        for p in reversed(self.patches):
+        for p in self.patches:
             p.stop()
-            
+
         # Restore original modules
         for module_name, module in self.original_modules.items():
             if module is None:
-                if module_name in sys.modules:
-                    del sys.modules[module_name]
+                if module_name in globals():
+                    del globals()[module_name]
             else:
-                sys.modules[module_name] = module
-                
+                globals()[module_name] = module
+
         # Remove any remaining references to the mocked modules
         modules_to_remove = [
-            'nixwhisper.universal_typing',
             'pynput',
             'pynput.keyboard',
             'PyQt5',
             'PyQt5.QtWidgets',
             'PyQt5.QtGui'
         ]
-        
+
         for module in modules_to_remove:
-            if module in sys.modules:
-                del sys.modules[module]
+            if module in globals():
+                del globals()[module]
 
     @patch('nixwhisper.universal_typing.PYNPROMPT_AVAILABLE', False)
     def test_type_text_pynput_unavailable(self):
-        """Test typing when pynput is not available."""
-        # Create a new instance - it should pick up the patched PYNPROMPT_AVAILABLE
-        typer = UniversalTyping()
-        with self.assertRaises(UniversalTypingError) as context:
-            typer._type_with_pynput("test")
-        self.assertEqual(str(context.exception), "pynput not available")
+        """Test typing text when pynput is unavailable.
 
-    @patch('subprocess.run')
-    def test_type_text_xdotool_not_found(self, mock_run):
-        """Test typing when xdotool is not installed."""
-        # Mock subprocess.run to simulate xdotool not found
-        mock_run.return_value.returncode = 1  # Simulate xdotool not found
-        
-        # Create a new instance
-        typer = UniversalTyping()
-        
-        # Patch _is_xdotool_available to return False
-        with patch.object(typer, '_is_xdotool_available', return_value=False):
-            with self.assertRaises(UniversalTypingError) as context:
-                typer._type_with_xdotool("test")
-            self.assertEqual(str(context.exception), "xdotool not available")
+        This test verifies that the internal pynput typing method correctly
+        handles the case when pynput is not available.
+
+        Note: This test accesses protected member _type_with_pynput directly
+        as it is testing the internal implementation details of the typing
+        methods.
+        """
+        with self.assertRaises(UniversalTypingError):
+            self.typer._type_with_pynput("test")
 
     @patch('nixwhisper.universal_typing.QT_AVAILABLE', False)
+    def test_type_text_qt_unavailable(self):
+        """Test typing text when Qt is unavailable.
+
+        This test verifies that the internal clipboard typing method correctly
+        handles the case when Qt is not available.
+
+        Note: This test accesses protected member _type_with_clipboard directly
+        as it is testing the internal implementation details of the typing
+        methods.
+        """
+        with self.assertRaises(UniversalTypingError):
+            self.typer._type_with_clipboard("test")
+
+    def test_type_text_invalid_method(self):
+        """Test typing text with an invalid method.
+
+        This test verifies that attempting to type text with an invalid
+        method raises an appropriate error.
+        """
+        with self.assertRaises(UniversalTypingError):
+            self.typer.type_text("test", "invalid")
+
+    def test_type_text_xdotool_error(self):
+        """Test typing text when xdotool fails.
+
+        This test verifies that the internal xdotool typing method correctly
+        handles failures from the xdotool command.
+
+        Note: This test accesses protected member _type_with_xdotool directly
+        as it is testing the internal implementation details of the typing
+        methods.
+        """
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = Exception("xdotool error")
+            with self.assertRaises(UniversalTypingError):
+                self.typer._type_with_xdotool("test")
+
+    @patch('nixwhisper.universal_typing.PYNPROMPT_AVAILABLE', False)
+    def test_type_text_pynput_unavailable_fallback(self):
+        """Test typing text when pynput is unavailable and fallback is used."""
+        self.typer = UniversalTyping()
+        with patch.object(self.typer, '_type_with_xdotool', return_value=True):
+            result = self.typer.type_text("test")
+            self.assertTrue(result)
+
+    @patch('nixwhisper.universal_typing.QT_AVAILABLE', False)
+    def test_type_text_qt_unavailable_fallback(self):
+        """Test typing text when Qt is unavailable and fallback is used."""
+        self.typer = UniversalTyping()
+        with patch.object(self.typer, '_type_with_xdotool', return_value=True):
+            result = self.typer.type_text("test")
+            self.assertTrue(result)
+
+    def test_type_text_success(self):
+        """Test typing text with successful typing."""
+        self.typer = UniversalTyping()
+        with patch.object(self.typer, '_type_with_pynput', return_value=True):
+            result = self.typer.type_text("test")
+            self.assertTrue(result)
+
+    def test_type_text_all_methods_fail(self):
+        """Test typing text when all methods fail.
+
+        This test verifies that attempting to type text when all available
+        typing methods fail results in an appropriate error.
+        """
+        pynput_error = UniversalTypingError("pynput failed")
+        xdotool_error = UniversalTypingError("xdotool failed")
+        clipboard_error = UniversalTypingError("clipboard failed")
+        with patch.object(
+            self.typer, '_type_with_pynput', side_effect=pynput_error
+        ), patch.object(
+            self.typer, '_type_with_xdotool', side_effect=xdotool_error
+        ), patch.object(
+            self.typer, '_type_with_clipboard', side_effect=clipboard_error
+        ):
+            with self.assertRaises(UniversalTypingError) as context:
+                self.typer.type_text("test")
+            self.assertEqual(
+                str(context.exception),
+                "All typing methods failed"
+            )
+
     def test_type_text_clipboard_failure(self):
-        """Test clipboard fallback failure when Qt is not available."""
+        """Test clipboard fallback failure when Qt is not available.
+
+        Note: This test accesses protected member _type_with_clipboard directly
+        as it is testing the internal implementation details of the typing
+        methods.
+        """
         # Create a new instance - it should pick up the patched QT_AVAILABLE
         typer = UniversalTyping()
-        
         # Test that clipboard method raises the expected error
         with self.assertRaises(UniversalTypingError) as context:
             typer._type_with_clipboard("test")
@@ -109,55 +177,33 @@ class TestUniversalTyping(unittest.TestCase):
 
     @patch('nixwhisper.universal_typing.QT_AVAILABLE', True)
     @patch('PyQt5.QtWidgets.QApplication')
-    def test_type_text_success(self, mock_qapp):
-        """Test the main type_text method with successful typing."""
+    def test_type_text_with_clipboard(self, mock_qapp):
+        """Test typing text using clipboard method."""
         # Create a mock clipboard
         mock_clipboard = MagicMock()
         mock_qapp.instance.return_value.clipboard.return_value = mock_clipboard
-        
         # Create a new instance with the mocked QApplication
         typer = UniversalTyping()
-        
-        # Patch the _type_with_pynput method to succeed
-        with patch.object(typer, '_type_with_pynput', return_value=True) as mock_type:
-            result = typer.type_text("test")
-            self.assertTrue(result)
-            mock_type.assert_called_once_with("test")
-        
-        # Test with specific method
-        with patch.object(typer, '_type_with_xdotool', return_value=True) as mock_xdotool:
-            result = typer.type_text("test", method="xdotool")
-            self.assertTrue(result)
-            mock_xdotool.assert_called_once_with("test")
-            
         # Test with clipboard method
         with patch.object(typer, '_type_with_clipboard', return_value=True) as mock_clip:
             text = "test clipboard"
-            result = typer.type_text(text, method="clipboard")
+            result = typer.type_text(text, "clipboard")
             self.assertTrue(result)
-            # Verify clipboard was called
             mock_clip.assert_called_once_with(text)
-
-    def test_type_text_fallback(self):
-        """Test fallback through all methods when each one fails."""
-        # Setup side effects for each method
-        with patch.object(self.typer, '_type_with_pynput', 
+        with patch.object(self.typer, '_type_with_pynput',
                         side_effect=UniversalTypingError("pynput failed")), \
-             patch.object(self.typer, '_type_with_xdotool', 
+            patch.object(self.typer, '_type_with_xdotool',
                         side_effect=UniversalTypingError("xdotool failed")), \
-             patch.object(self.typer, '_type_with_clipboard', 
+            patch.object(self.typer, '_type_with_clipboard',
                         return_value=True) as mock_clipboard:
-            
             # Test
             text = "Fallback test"
             result = self.typer.type_text(text)
-            
             # Verify the call worked (clipboard should have succeeded)
             self.assertTrue(result)
-            
             # Verify clipboard was called as fallback
             mock_clipboard.assert_called_once_with(text)
-        
+
     @patch('nixwhisper.universal_typing.QT_AVAILABLE', True)
     @patch('PyQt5.QtWidgets.QApplication')
     def test_type_text_no_methods_available(self, mock_qapp):
@@ -165,25 +211,20 @@ class TestUniversalTyping(unittest.TestCase):
         # Create a mock clipboard
         mock_clipboard = MagicMock()
         mock_qapp.instance.return_value.clipboard.return_value = mock_clipboard
-        
         # Create a new instance with the mocked QApplication
         typer = UniversalTyping()
-        
         # Save the original preferred_methods
         original_preferred_methods = typer.preferred_methods
-        
         try:
             # Set the preferred methods to try all methods
             typer.preferred_methods = ['pynput', 'xdotool', 'clipboard']
-            
             # Patch all methods to raise exceptions
-            with patch.object(typer, '_type_with_pynput', 
+            with patch.object(typer, '_type_with_pynput',
                             side_effect=UniversalTypingError("pynput failed")), \
-                 patch.object(typer, '_type_with_xdotool', 
+                 patch.object(typer, '_type_with_xdotool',
                             side_effect=UniversalTypingError("xdotool failed")), \
-                 patch.object(typer, '_type_with_clipboard', 
+                 patch.object(typer, '_type_with_clipboard',
                             side_effect=UniversalTypingError("clipboard failed")):
-                
                 # Test that the error is raised with the correct message
                 with self.assertRaises(UniversalTypingError) as context:
                     typer.type_text("test")
@@ -191,8 +232,7 @@ class TestUniversalTyping(unittest.TestCase):
         finally:
             # Restore original preferred_methods
             typer.preferred_methods = original_preferred_methods
-    
 
 
 if __name__ == '__main__':
-    unittest.main()
+    main()

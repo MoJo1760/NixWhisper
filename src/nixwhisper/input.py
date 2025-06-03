@@ -189,24 +189,9 @@ class TextInput:
         Returns:
             bool: True if successful
         """
-        try:
-            # Escape special characters for shell
-            import shlex
-            escaped_text = shlex.quote(text)
+        from .utils.shell import type_text_xdotool
+        return type_text_xdotool(text)
             
-            # Type the text
-            subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--", escaped_text],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            return True
-            
-        except subprocess.SubprocessError as e:
-            logging.warning(f"xdotool failed: {e}")
-            return False
-    
     def _type_with_gtk(self, text: str) -> bool:
         """Type text using GTK.
         

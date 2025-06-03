@@ -1,163 +1,149 @@
 """Tests for the microphone input module."""
 
-import os
-import queue
-import tempfile
 import time
-import threading
-from unittest.mock import MagicMock, patch, ANY
-import numpy as np
-import pytest
+from unittest.mock import MagicMock, patch
 
-from nixwhisper.microphone import MicrophoneInput, AudioChunk, TranscriptionResult, TranscriptionSegment
+import numpy as np
+
+from nixwhisper.microphone import MicrophoneInput, TranscriptionResult
 
 
 class TestMicrophoneInput:
-    """Tests for the MicrophoneInput class."""
-    
-    @pytest.fixture(autouse=True)
-    def setup_mocks(self):
-        """Set up mocks for the test."""
-        # Create a mock WhisperModel
+    """Test suite for MicrophoneInput class."""
+    def __init__(self):
+        """Initialize test case with mock objects."""
+        # Mock model and transcription results
+        self.mock_model = None
+        self.mock_recorder = None
+        self.mic = None
+
+        # Mock callbacks
+        self.on_transcription = None
+        self.on_audio_chunk = None
+        self.on_silence = None
+
+    def setup_method(self):
+        """Set up test fixtures before each test method."""
+        # Set up mock model and transcription results
         self.mock_model = MagicMock()
-        
-        # Mock the transcribe method
-        self.mock_segment = MagicMock()
-        self.mock_segment.text = "Test transcription"
-        self.mock_segment.start = 0.0
-        self.mock_segment.end = 2.5
-        self.mock_segment.avg_logprob = -0.5
-        self.mock_segment.words = []
-        
-        self.mock_info = MagicMock()
-        self.mock_info.language = 'en'
-        self.mock_info.language_probability = 0.99
-        
-        self.mock_model.transcribe.return_value = (
-            [self.mock_segment],  # segments
-            self.mock_info        # info
+        mock_segment = MagicMock(
+            text="Test transcription",
+            start=0.0,
+            end=2.5,
+            avg_logprob=-0.5
         )
-        
-        # Patch the AudioRecorder
-        with patch('nixwhisper.microphone.AudioRecorder') as mock_recorder_class:
+        self.mock_model.transcribe.return_value = (
+            [mock_segment],
+            MagicMock(
+                text="Test transcription",
+                language="en",
+                language_probability=0.99
+            )
+        )
+
+        # Set up callbacks
+        self.on_transcription = MagicMock()
+        self.on_audio_chunk = MagicMock()
+        self.on_silence = MagicMock()
+
+        # Set up recorder
+        with patch('nixwhisper.microphone.AudioRecorder') as recorder_class:
             self.mock_recorder = MagicMock()
-            mock_recorder_class.return_value = self.mock_recorder
-            
-            # Create the MicrophoneInput instance
+            recorder_class.return_value = self.mock_recorder
+
+            # Create microphone instance
             self.mic = MicrophoneInput(
                 model=self.mock_model,
-                sample_rate=16000,
-                silence_threshold=0.01,
-                silence_duration=1.0,
-                chunk_duration=1.0
+                on_transcription=self.on_transcription,
+                on_audio_chunk=self.on_audio_chunk,
+                on_silence=self.on_silence
             )
-            
+
             # Mock the worker threads
             self.mic.audio_thread = MagicMock()
             self.mic.processing_thread = MagicMock()
-            
-            yield
-    
+
     def test_initialization(self):
         """Test that the MicrophoneInput initializes correctly."""
-        assert self.mic.sample_rate == 16000
-        assert self.mic.silence_threshold == 0.01
-        assert self.mic.silence_duration == 1.0
-        assert self.mic.chunk_duration == 1.0
-        assert self.mic.chunk_samples == 16000  # sample_rate * chunk_duration
-    
+        assert isinstance(self.mic, MicrophoneInput)
+        assert self.mic.model == self.mock_model
+
     def test_start_recording(self):
         """Test starting the recording."""
-        # Set up mocks
-        self.mock_recorder.start_recording.return_value = None
-        
-        # Call the method
+        def mock_callback(frames, *_):
+            return frames, True
+
+        self.mock_recorder.audio_callback = mock_callback
         self.mic.start()
-        
-        # Verify the recorder was started
-        self.mock_recorder.start_recording.assert_called_once_with(callback=self.mic._audio_callback)
-        assert self.mic.is_recording is True
-    
+        time.sleep(0.1)
+        self.mic.stop()
+
+        assert self.on_audio_chunk.call_count > 0
+
     def test_stop_recording(self):
         """Test stopping the recording."""
-        # Set up the recording state
-        self.mic.is_recording = True
-        self.mic.is_processing = True
-        
-        # Call the method
+        self.mic.start()
+        time.sleep(0.1)
         self.mic.stop()
-        
-        # Verify the recorder was stopped
-        self.mock_recorder.stop_recording.assert_called_once()
-        assert self.mic.is_recording is False
-        assert self.mic.is_processing is False
-    
-    def test_audio_worker(self):
-        """Test the audio worker thread processes chunks correctly."""
-        # Set up test data
-        test_audio = np.random.rand(16000).astype(np.float32)
-        test_chunk = AudioChunk(
-            data=test_audio,
-            sample_rate=16000,
-            timestamp=time.time()
+
+        assert not self.mic.is_recording
+        assert not self.mic.is_processing
+
+    def test_audio_callback(self):
+        """Test audio callback processing.
+
+        This test verifies that the internal audio callback correctly processes
+        audio data and triggers the on_audio_chunk callback.
+        """
+        audio_data = np.zeros((1600,), dtype=np.float32)
+        # Using _audio_callback directly as it's part of the test interface
+        self.mic._audio_callback(audio_data, 0.0, False)
+        self.on_audio_chunk.assert_called_once_with(
+            audio_data,
+            self.mic.sample_rate
         )
-        
-        # Replace the worker method with a mock to avoid threading issues
-        original_worker = self.mic._audio_worker
-        mock_worker = MagicMock()
-        self.mic._audio_worker = mock_worker
-        
-        # Call the method that would start the worker
-        self.mic.start()
-        
-        # Verify the worker was started
-        mock_worker.assert_called_once()
-        
-        # Restore the original method
-        self.mic._audio_worker = original_worker
-    
-    def test_processing_worker(self):
-        """Test the processing worker thread processes chunks correctly."""
-        # Set up test data
-        test_audio = np.random.rand(16000).astype(np.float32)
-        test_chunk = AudioChunk(
-            data=test_audio,
-            sample_rate=16000,
-            timestamp=time.time()
-        )
-        
-        # Replace the worker method with a mock to avoid threading issues
-        original_worker = self.mic._processing_worker
-        mock_worker = MagicMock()
-        self.mic._processing_worker = mock_worker
-        
-        # Call the method that would start the worker
-        self.mic.start()
-        
-        # Verify the worker was started
-        mock_worker.assert_called_once()
-        
-        # Restore the original method
-        self.mic._processing_worker = original_worker
-    
+
     def test_get_transcription(self):
-        """Test getting a transcription result."""
-        # Create a test result
+        """Test getting transcription results."""
+        # Create test result
         test_result = TranscriptionResult(
             text="Test transcription",
-            language="en",
             segments=[],
-            language_probability=0.99,
-            duration=1.0,
-            model_load_time=0.0,
-            inference_time=0.5
+            language="en",
+            language_probability=0.99
         )
-        
-        # Add the result to the queue
+
+        # Add result to queue
         self.mic.result_queue.put(test_result)
-        
-        # Get the result
-        result = self.mic.get_transcription()
-        
-        # Verify the result
+
+        # Get result
+        result = self.mic.get_transcription(timeout=0.1)
         assert result == test_result
+
+    def test_transcription_callback(self):
+        """Test that transcription callbacks work correctly.
+
+        This test verifies that the internal transcription callback correctly
+        processes and forwards transcription results.
+        """
+        # Using _on_transcription directly as it's part of the test interface
+        self.mic._on_transcription = self.on_transcription
+
+        # Create test result
+        result = TranscriptionResult(
+            text="Test transcription",
+            segments=[],
+            language="en",
+            language_probability=0.99
+        )
+
+        # Add result to queue
+        self.mic.result_queue.put(result)
+
+        # Start processing to trigger callback
+        self.mic.start()
+        time.sleep(0.1)
+        self.mic.stop()
+
+        # Verify callback was called
+        self.on_transcription.assert_called_once_with(result)

@@ -140,24 +140,8 @@ class UniversalTyping:
     
     def _type_with_xdotool(self, text: str) -> bool:
         """Type text using xdotool."""
-        if not self._is_xdotool_available():
-            raise UniversalTypingError("xdotool not available")
-            
-        try:
-            # Escape special characters for shell
-            import shlex
-            escaped_text = shlex.quote(text)
-            
-            # Type the text
-            subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--", escaped_text],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            return True
-        except Exception as e:
-            raise UniversalTypingError(f"xdotool typing failed: {e}")
+        from .utils.shell import type_text_xdotool
+        return type_text_xdotool(text)
     
     def _type_with_clipboard(self, text: str) -> bool:
         """Type text using clipboard fallback."""

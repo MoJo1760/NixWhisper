@@ -2,7 +2,7 @@
 
 import time
 from pathlib import Path
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ from .base import BaseTranscriber, TranscriptionResult, TranscriptionSegment
 
 class FasterWhisperTranscriber(BaseTranscriber):
     """Faster-Whisper implementation of the BaseTranscriber interface."""
-    
+
     def __init__(
         self,
         model_size: str = "base",
@@ -23,7 +23,7 @@ class FasterWhisperTranscriber(BaseTranscriber):
         **kwargs
     ):
         """Initialize the Faster-Whisper transcriber.
-        
+
         Args:
             model_size: Model size (tiny, base, small, medium, large, large-v2, large-v3)
             device: Device to use (cpu, cuda, auto)
@@ -50,22 +50,18 @@ class FasterWhisperTranscriber(BaseTranscriber):
         ]
         self.kwargs = kwargs
         self._load_time = 0.0
-    
+
     def load_model(self):
         """Load the Whisper model."""
         if self.is_loaded:
             return
-            
+
         start_time = time.time()
-        
+
         # Handle device selection
-        if self.device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            compute_type = self.compute_type if device == "cuda" else "int8"
-        else:
-            device = self.device
-            compute_type = self.compute_type
-        
+        from ..utils.model import get_device_and_compute_type
+        device, compute_type = get_device_and_compute_type(self.device, self.compute_type)
+
         # Initialize the model
         self.model = WhisperModel(
             self.model_size,
@@ -74,19 +70,19 @@ class FasterWhisperTranscriber(BaseTranscriber):
             download_root=self.model_dir,
             **self.kwargs
         )
-        
+
         self._load_time = time.time() - start_time
-    
+
     @property
     def is_loaded(self) -> bool:
         """Check if the model is loaded."""
         return self.model is not None
-    
+
     @property
     def supported_languages(self) -> List[str]:
         """Get a list of supported language codes."""
         return self._supported_languages
-    
+
     def transcribe(
         self,
         audio: Union[str, Path, bytes, np.ndarray],
@@ -94,18 +90,18 @@ class FasterWhisperTranscriber(BaseTranscriber):
         **kwargs
     ) -> TranscriptionResult:
         """Transcribe audio to text using Faster-Whisper.
-        
+
         Args:
             audio: Path to audio file, audio data as bytes, or numpy array
             language: Language code (e.g., 'en' for English)
             **kwargs: Additional arguments for the transcriber
-            
+
         Returns:
             TranscriptionResult containing the transcribed text and metadata
         """
         if not self.is_loaded:
             self.load_model()
-        
+
         # Handle different input types
         if isinstance(audio, Path):
             audio = str(audio)
@@ -115,7 +111,7 @@ class FasterWhisperTranscriber(BaseTranscriber):
             # Reshape to 1D array if it's not already
             if len(audio.shape) > 1:
                 audio = audio.reshape(-1)
-        
+
         # Set default options
         options = {
             "language": language,
@@ -126,42 +122,15 @@ class FasterWhisperTranscriber(BaseTranscriber):
             "word_timestamps": True,
         }
         options.update(kwargs)
-        
+
         # Run transcription
         start_time = time.time()
         segments, info = self.model.transcribe(audio, **options)
-        
-        # Convert segments to our format
-        transcription_segments = []
-        full_text = []
-        
-        for segment in segments:
-            # Create word-level timestamps if available
-            words = None
-            if hasattr(segment, 'words') and segment.words:
-                words = [
-                    {
-                        'word': word.word,
-                        'start': word.start,
-                        'end': word.end,
-                        'confidence': word.probability
-                    }
-                    for word in segment.words
-                ]
-            
-            # Create segment
-            seg = TranscriptionSegment(
-                start=segment.start,
-                end=segment.end,
-                text=segment.text.strip(),
-                words=words,
-                speaker=None,  # Speaker diarization not supported by default
-                confidence=segment.avg_logprob if hasattr(segment, 'avg_logprob') else None
-            )
-            
-            transcription_segments.append(seg)
-            full_text.append(segment.text.strip())
-        
+
+        # Convert to our format using utility
+        from ..utils.transcription import process_whisper_segments
+        transcription_segments, full_text = process_whisper_segments(segments)
+
         # Calculate total duration
         duration = time.time() - start_time
         

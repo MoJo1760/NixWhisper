@@ -31,12 +31,11 @@ class TranscriptionResult:
 
 class BaseTranscriber(ABC):
     """Base class for all speech-to-text transcribers."""
-    
+
     @abstractmethod
     def load_model(self):
         """Load the model and any required resources."""
-        pass
-    
+
     @abstractmethod
     def transcribe(
         self,
@@ -45,33 +44,30 @@ class BaseTranscriber(ABC):
         **kwargs
     ) -> TranscriptionResult:
         """Transcribe audio to text.
-        
+
         Args:
             audio: Path to audio file or audio data as bytes
             language: Language code (e.g., 'en' for English)
             **kwargs: Additional arguments for the transcriber
-            
+
         Returns:
             TranscriptionResult containing the transcribed text and metadata
         """
-        pass
-    
+
     @property
     @abstractmethod
     def is_loaded(self) -> bool:
         """Check if the model is loaded.
-        
+
         Returns:
             bool: True if the model is loaded, False otherwise
         """
-        pass
-    
+
     @property
     @abstractmethod
     def supported_languages(self) -> List[str]:
         """Get a list of supported language codes.
-        
+
         Returns:
             List of supported language codes (e.g., ['en', 'es', 'fr'])
         """
-        pass
