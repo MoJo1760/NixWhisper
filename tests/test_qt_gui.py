@@ -171,6 +171,108 @@ def test_recording_thread(qtbot, caplog):
     window.close()
 
 
+def test_cursor_relative_positioning(qtbot, monkeypatch):
+    """Test cursor-relative positioning in the overlay window."""
+    # Create a mock cursor position
+    from dataclasses import dataclass
+    
+    @dataclass
+    class MockCursorPosition:
+        x: int
+        y: int
+        screen_number: int = 0
+        screen_x: int = 0
+        screen_y: int = 0
+        screen_width: int = 1920
+        screen_height: int = 1080
+    
+    # Create mock screens
+    from PyQt6.QtGui import QScreen
+    from PyQt6.QtCore import QRect
+    
+    class MockScreen(QScreen):
+        def __init__(self, x=0, y=0, width=1920, height=1080, name="MockScreen"):
+            super().__init__()
+            self._geometry = QRect(x, y, width, height)
+            self._name = name
+            
+        def geometry(self):
+            return self._geometry
+            
+        def name(self):
+            return self._name
+    
+    # Create the overlay window
+    overlay = OverlayWindow()
+    qtbot.addWidget(overlay)
+    overlay.resize(400, 100)  # Set a reasonable size for testing
+    
+    # Test 1: Test cursor-relative positioning disabled (should center)
+    overlay.enable_cursor_relative_positioning(False)
+    overlay.update_position()
+    
+    # Test 2: Test cursor-relative positioning enabled
+    overlay.enable_cursor_relative_positioning(True)
+    
+    # Mock get_cursor_position to return our test position
+    def mock_get_cursor_position(include_screen_info=False):
+        return MockCursorPosition(x=500, y=500)
+    
+    # Mock QGuiApplication.screens()
+    def mock_screens():
+        return [MockScreen()]
+    
+    # Apply the mocks
+    from nixwhisper import qt_gui
+    monkeypatch.setattr(qt_gui, 'get_cursor_position', mock_get_cursor_position)
+    monkeypatch.setattr('PyQt6.QtGui.QGuiApplication.screens', mock_screens)
+    
+    # Test with default offsets (20, 20)
+    overlay.update_position()
+    pos = overlay.pos()
+    assert 520 <= pos.x() <= 540  # 500 + 20 +- 20px margin
+    assert 520 <= pos.y() <= 540  # 500 + 20 +- 20px margin
+    
+    # Test with custom offsets
+    overlay.set_cursor_offset(50, -30)
+    overlay.update_position()
+    pos = overlay.pos()
+    assert 550 <= pos.x() <= 570  # 500 + 50 +- 20px margin
+    assert 470 <= pos.y() <= 490  # 500 - 30 +- 20px margin
+    
+    # Test edge case: cursor near screen edge
+    def mock_edge_cursor():
+        return MockCursorPosition(x=1900, y=1000)
+    
+    monkeypatch.setattr(qt_gui, 'get_cursor_position', mock_edge_cursor)
+    overlay.update_position()
+    pos = overlay.pos()
+    assert pos.x() < 1920 - 400  # Should be within screen width - window width
+    assert pos.y() < 1080 - 100  # Should be within screen height - window height
+    
+    # Test with multiple screens
+    def mock_multi_screens():
+        return [
+            MockScreen(0, 0, 1920, 1080, "Screen1"),
+            MockScreen(1920, 0, 1920, 1080, "Screen2")
+        ]
+    
+    monkeypatch.setattr('PyQt6.QtGui.QGuiApplication.screens', mock_multi_screens)
+    
+    # Cursor on second screen
+    def mock_second_screen_cursor():
+        return MockCursorPosition(x=2000, y=500, screen_number=1)
+    
+    monkeypatch.setattr(qt_gui, 'get_cursor_position', mock_second_screen_cursor)
+    overlay.update_position()
+    pos = overlay.pos()
+    assert 1920 <= pos.x() <= 1920 + 1920 - 400  # Should be on second screen
+    
+    # Clean up
+    overlay.hide()
+    overlay.deleteLater()
+
+
 if __name__ == '__main__':
     # This block is not needed when running with pytest
     app = QApplication(sys.argv)
