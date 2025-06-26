@@ -70,6 +70,24 @@ class HotkeyConfig(BaseModel):
     exit_app: str = "<ctrl>+<alt>+x"
 
 
+class OverlayConfig(BaseModel):
+    """Overlay window configuration."""
+    cursor_connection_enabled: bool = True
+    cursor_connection_style: str = "arrow"  # "arrow", "line", or "none"
+    cursor_connection_color: str = "#64c8ff"  # Blue default
+    cursor_connection_width: int = 2
+    cursor_connection_arrow_size: int = 8
+    cursor_connection_animated: bool = True
+    
+    @field_validator('cursor_connection_style')
+    @classmethod
+    def validate_connection_style(cls, v: str) -> str:
+        valid_styles = ["arrow", "line", "none"]
+        if v not in valid_styles:
+            raise ValueError(f"Connection style must be one of {valid_styles}")
+        return v
+
+
 class UIConfig(BaseModel):
     """User interface configuration."""
     theme: str = "system"
@@ -95,6 +113,7 @@ class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     hotkeys: HotkeyConfig = Field(default_factory=HotkeyConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    overlay: OverlayConfig = Field(default_factory=OverlayConfig)
 
     @classmethod
     def from_file(cls, config_path: Union[str, Path]) -> 'Config':

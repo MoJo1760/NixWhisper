@@ -6,11 +6,12 @@ import math
 from typing import Optional
 
 from nixwhisper.config import Config
+from nixwhisper.x11_cursor import get_cursor_position, get_cursor_tracker  # Import cursor tracking functions
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Tuple
 
 from PyQt6.QtCore import (
-    Qt, QTimer, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve,
+    Qt, QTimer, QPointF, QPoint, QRect, QRectF, QPropertyAnimation, QEasingCurve,
     pyqtSignal, QThread, QSize, QEvent, QMetaObject
 )
 from evdev import InputDevice, categorize, ecodes, list_devices
@@ -59,17 +60,106 @@ class OverlayWindow(QWidget):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
             
+            # Install event filter to handle screen changes
+            QGuiApplication.instance().primaryScreenChanged.connect(self._handle_primary_screen_changed)
+            QGuiApplication.instance().screenAdded.connect(self._handle_screen_changed)
+            QGuiApplication.instance().screenRemoved.connect(self._handle_screen_changed)
+            
+            # Animation settings with defaults
+            self._animation_enabled = True
+            self._animation_duration = 200  # ms
+            self._animation_easing = QEasingCurve.Type.OutQuad
+            
+            # Performance optimization settings
+            self._min_movement_threshold = 2  # pixels
+            self._skip_animation_distance = 5  # pixels (don't animate small movements)
+            self._last_animation_time = 0
+            self._min_animation_interval = 16  # ~60fps (ms)
+            self._last_position = QPoint(0, 0)
+            
+            # Available easing curves for configuration
+            self._easing_curve_map = {
+                'linear': QEasingCurve.Type.Linear,
+                'in_quad': QEasingCurve.Type.InQuad,
+                'out_quad': QEasingCurve.Type.OutQuad,
+                'in_out_quad': QEasingCurve.Type.InOutQuad,
+                'out_in_quad': QEasingCurve.Type.OutInQuad,
+                'in_cubic': QEasingCurve.Type.InCubic,
+                'out_cubic': QEasingCurve.Type.OutCubic,
+                'in_out_cubic': QEasingCurve.Type.InOutCubic,
+                'out_in_cubic': QEasingCurve.Type.OutInCubic,
+                'in_quart': QEasingCurve.Type.InQuart,
+                'out_quart': QEasingCurve.Type.OutQuart,
+                'in_out_quart': QEasingCurve.Type.InOutQuart,
+                'out_in_quart': QEasingCurve.Type.OutInQuart,
+                'in_quint': QEasingCurve.Type.InQuint,
+                'out_quint': QEasingCurve.Type.OutQuint,
+                'in_out_quint': QEasingCurve.Type.InOutQuint,
+                'out_in_quint': QEasingCurve.Type.OutInQuint,
+                'in_sine': QEasingCurve.Type.InSine,
+                'out_sine': QEasingCurve.Type.OutSine,
+                'in_out_sine': QEasingCurve.Type.InOutSine,
+                'out_in_sine': QEasingCurve.Type.OutInSine,
+                'in_expo': QEasingCurve.Type.InExpo,
+                'out_expo': QEasingCurve.Type.OutExpo,
+                'in_out_expo': QEasingCurve.Type.InOutExpo,
+                'out_in_expo': QEasingCurve.Type.OutInExpo,
+                'in_circ': QEasingCurve.Type.InCirc,
+                'out_circ': QEasingCurve.Type.OutCirc,
+                'in_out_circ': QEasingCurve.Type.InOutCirc,
+                'out_in_circ': QEasingCurve.Type.OutInCirc,
+                'in_elastic': QEasingCurve.Type.InElastic,
+                'out_elastic': QEasingCurve.Type.OutElastic,
+                'in_out_elastic': QEasingCurve.Type.InOutElastic,
+                'out_in_elastic': QEasingCurve.Type.OutInElastic,
+                'in_back': QEasingCurve.Type.InBack,
+                'out_back': QEasingCurve.Type.OutBack,
+                'in_out_back': QEasingCurve.Type.InOutBack,
+                'out_in_back': QEasingCurve.Type.OutInBack,
+                'in_bounce': QEasingCurve.Type.InBounce,
+                'out_bounce': QEasingCurve.Type.OutBounce,
+                'in_out_bounce': QEasingCurve.Type.InOutBounce,
+                'out_in_bounce': QEasingCurve.Type.OutInBounce,
+            }
+            
+            # Initialize animation
+            self._animation = QPropertyAnimation(self, b"pos")
+            self._update_animation_settings()
+            self._animation.finished.connect(self._on_animation_finished)
+            self._is_animating = False
+            self._pending_position = None  # Store position if animation is in progress
+            
             # Visual properties
             self.radius = 15
             self.padding = 10
             self.spectrum = [0.0] * 32  # Initialize with zeros
             self.is_recording = False
             
+            # Cursor-relative positioning properties
+            self.cursor_relative_positioning = False  # Default to center positioning
+            self.cursor_offset_x = 20  # Default horizontal offset from cursor
+            self.cursor_offset_y = 20  # Default vertical offset from cursor
+            self.last_cursor_position = None
+            
+            # Visual connection indicator properties
+            self.show_cursor_connection = True  # Show visual connection to cursor
+            self.connection_style = 'arrow'  # 'arrow', 'line', or 'none'
+            self.connection_color = QColor(100, 200, 255, 180)  # Light blue with transparency
+            self.connection_width = 2  # Line thickness
+            self.arrow_size = 8  # Arrow head size in pixels
+            self.connection_animated = True  # Enable pulsing/fading animation
+            self._connection_animation_phase = 0.0  # Animation phase (0-1)
+            
             # Set initial size and position (will be overridden by parent)
             self.resize(400, 80)  # Smaller height since we don't need as much space
             
             # Disable test pattern by default
             self.test_pattern = False
+            
+            # Setup animation timer for visual connection
+            self._connection_timer = QTimer(self)
+            self._connection_timer.timeout.connect(self._update_connection_animation)
+            self._connection_timer.start(50)  # 20 FPS for smooth animation
             
             logger.debug("OverlayWindow initialized")
             
@@ -81,6 +171,225 @@ class OverlayWindow(QWidget):
         """Disable the test pattern after initial display."""
         self.test_pattern = False
         self.update()
+    
+    def _update_connection_animation(self):
+        """Update the animation phase for the cursor connection indicator."""
+        if self.connection_animated and self.show_cursor_connection:
+            self._connection_animation_phase += 0.05  # Increment animation
+            if self._connection_animation_phase > 1.0:
+                self._connection_animation_phase = 0.0
+            self.update()  # Trigger repaint
+    
+    def _on_cursor_position_changed(self, cursor_pos):
+        """Handle cursor position changes.
+        
+        Args:
+            cursor_pos: CursorPosition object with the new cursor position and screen info
+        """
+        if not self.cursor_relative_positioning:
+            logger.debug("Ignoring cursor position change - cursor-relative positioning is disabled")
+            return
+            
+        try:
+            logger.debug(
+                f"Cursor position changed - x={cursor_pos.x}, y={cursor_pos.y}, "
+                f"screen={cursor_pos.screen_number}, "
+                f"screen_geometry=({cursor_pos.screen_x},{cursor_pos.screen_y} {cursor_pos.screen_width}x{cursor_pos.screen_height})"
+            )
+            
+            # Update the last cursor position
+            prev_pos = self.last_cursor_position
+            self.last_cursor_position = (cursor_pos.x, cursor_pos.y)
+            
+            # Calculate movement delta if we had a previous position
+            if prev_pos is not None:
+                dx = cursor_pos.x - prev_pos[0]
+                dy = cursor_pos.y - prev_pos[1]
+                distance = (dx**2 + dy**2) ** 0.5
+                logger.debug(f"Cursor moved {distance:.1f}px (dx={dx}, dy={dy}) from previous position")
+            
+            # Only update position if window is visible
+            if self.isVisible():
+                logger.debug("Window is visible, updating position...")
+                self.update_position()
+            else:
+                logger.debug("Window is not visible, skipping position update")
+                
+        except Exception as e:
+            logger.error(f"Error in cursor position callback: {e}", exc_info=True)
+    
+    def enable_cursor_relative_positioning(self, enabled: bool = True):
+        """Enable or disable cursor-relative positioning.
+        
+        Args:
+            enabled: True to enable cursor-relative positioning, False for center positioning
+        """
+        logger.debug(f"enable_cursor_relative_positioning({enabled}) called")
+        
+        if enabled == self.cursor_relative_positioning:
+            logger.debug("Cursor-relative positioning already in the requested state, no change needed")
+            return  # No change needed
+            
+        self.cursor_relative_positioning = enabled
+        logger.info(f"{'Enabling' if enabled else 'Disabling'} cursor-relative positioning")
+        
+        if enabled:
+            # Get cursor tracker instance
+            cursor_tracker = get_cursor_tracker()
+            
+            if cursor_tracker:
+                # Log current cursor position for debugging
+                try:
+                    cursor_pos = get_cursor_position(include_screen_info=True)
+                    if cursor_pos:
+                        logger.debug(
+                            f"Current cursor position: x={cursor_pos.x}, y={cursor_pos.y}, "
+                            f"screen={cursor_pos.screen_number}, "
+                            f"screen_geometry=({cursor_pos.screen_x},{cursor_pos.screen_y} {cursor_pos.screen_width}x{cursor_pos.screen_height})"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to get initial cursor position: {e}")
+                
+                # Register callback and start polling
+                try:
+                    # Store the callback reference to prevent garbage collection
+                    self._cursor_callback = self._on_cursor_position_changed
+                    cursor_tracker.register_callback(self._cursor_callback)
+                    logger.debug("Successfully registered cursor position callback")
+                    
+                    cursor_tracker.start_polling()
+                    logger.info("Started cursor position polling")
+                    
+                    # Log polling status
+                    logger.debug(
+                        f"Cursor tracker status - is_polling: {cursor_tracker.is_polling()}, "
+                        f"polling_interval: {cursor_tracker.polling_interval}ms, "
+                        f"callbacks_registered: {len(cursor_tracker.callbacks) if hasattr(cursor_tracker, 'callbacks') else 'N/A'}"
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to enable cursor tracking: {e}", exc_info=True)
+                    self.cursor_relative_positioning = False
+                    return
+            else:
+                logger.error("Failed to get cursor tracker, cursor-relative positioning disabled")
+                self.cursor_relative_positioning = False
+        else:
+            # Unregister cursor position callback
+            cursor_tracker = get_cursor_tracker()
+            if cursor_tracker and hasattr(self, '_cursor_callback'):
+                try:
+                    cursor_tracker.unregister_callback(self._cursor_callback)
+                    logger.debug("Successfully unregistered cursor position callback")
+                    
+                    cursor_tracker.stop_polling()
+                    logger.info("Stopped cursor position polling")
+                    
+                    # Log final status
+                    logger.debug(
+                        f"Cursor tracker status after stopping - is_polling: {cursor_tracker.is_polling()}, "
+                        f"callbacks_registered: {len(cursor_tracker.callbacks) if hasattr(cursor_tracker, 'callbacks') else 'N/A'}"
+                    )
+                    
+                    del self._cursor_callback
+                except Exception as e:
+                    logger.error(f"Error removing cursor callback: {e}", exc_info=True)
+        
+        self.cursor_relative_positioning = enabled
+        
+        # Update the position immediately when toggling
+        self.update_position()
+    
+    def set_cursor_offset(self, x_offset: int = 20, y_offset: int = 20):
+        """Set the offset from cursor position.
+        
+        Args:
+            x_offset: Horizontal offset in pixels (default: 20, min: -1000, max: 1000)
+            y_offset: Vertical offset in pixels (default: 20, min: -1000, max: 1000)
+            
+        Note:
+            Negative values position the window to the left/above the cursor.
+            Positive values position the window to the right/below the cursor.
+        """
+        # Validate input ranges
+        x_offset = max(-1000, min(1000, int(x_offset)))
+        y_offset = max(-1000, min(1000, int(y_offset)))
+        
+        # Only update if the values have changed
+        if self.cursor_offset_x == x_offset and self.cursor_offset_y == y_offset:
+            return
+            
+        self.cursor_offset_x = x_offset
+        self.cursor_offset_y = y_offset
+        
+        logger.debug(f"Cursor offset set to ({x_offset}, {y_offset})")
+        
+        # Update position if we're in cursor-relative mode
+        if self.cursor_relative_positioning:
+            logger.debug("Updating window position due to offset change")
+            self.update_position()
+    
+    def set_cursor_connection_style(self, style: str = 'arrow'):
+        """Set the visual connection style between overlay and cursor.
+        
+        Args:
+            style: Connection style - 'arrow', 'line', or 'none'
+        """
+        valid_styles = ['arrow', 'line', 'none']
+        if style not in valid_styles:
+            logger.warning(f"Invalid connection style '{style}', using 'arrow'")
+            style = 'arrow'
+        
+        self.connection_style = style
+        logger.debug(f"Cursor connection style set to '{style}'")
+        self.update()  # Trigger repaint
+    
+    def set_cursor_connection_enabled(self, enabled: bool = True):
+        """Enable or disable the visual cursor connection.
+        
+        Args:
+            enabled: True to show connection, False to hide
+        """
+        self.show_cursor_connection = enabled
+        logger.debug(f"Cursor connection {'enabled' if enabled else 'disabled'}")
+        self.update()  # Trigger repaint
+    
+    def set_cursor_connection_color(self, color: QColor = None):
+        """Set the color of the cursor connection indicator.
+        
+        Args:
+            color: QColor object, defaults to light blue if None
+        """
+        if color is None:
+            color = QColor(100, 200, 255, 180)
+        
+        self.connection_color = color
+        logger.debug(f"Cursor connection color set to {color.name()}")
+        self.update()  # Trigger repaint
+    
+    def set_cursor_connection_animated(self, animated: bool = True):
+        """Enable or disable animation for the cursor connection.
+        
+        Args:
+            animated: True for pulsing animation, False for static
+        """
+        self.connection_animated = animated
+        logger.debug(f"Cursor connection animation {'enabled' if animated else 'disabled'}")
+    
+    def get_cursor_connection_settings(self) -> dict:
+        """Get current cursor connection settings.
+        
+        Returns:
+            Dictionary with connection settings
+        """
+        return {
+            'enabled': self.show_cursor_connection,
+            'style': self.connection_style,
+            'color': self.connection_color.name(),
+            'width': self.connection_width,
+            'arrow_size': self.arrow_size,
+            'animated': self.connection_animated
+        }
     
     def set_recording(self, recording: bool):
         """Update the recording status."""
@@ -126,13 +435,549 @@ class OverlayWindow(QWidget):
         self.pulse_animation.setLoopCount(-1)  # Infinite loop
         
     def update_position(self):
-        """Position the window at the bottom center of the screen."""
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        window_size = self.sizeHint()
-        x = (screen.width() - window_size.width()) // 2
-        y = screen.height() - window_size.height() - 50  # 50px from bottom
-        self.move(x, y)
+        """Position the window based on cursor position or center of screen.
         
+        This method handles both single and multi-monitor setups by using the screen
+        that contains the cursor for positioning the overlay window. It includes
+        comprehensive error handling and fallback mechanisms.
+        """
+        logger.debug("Updating overlay window position...")
+        
+        if not self.cursor_relative_positioning:
+            logger.debug("Cursor-relative positioning is disabled, using center positioning")
+            cursor_pos = get_cursor_position(include_screen_info=True)
+            screen_num = cursor_pos.screen_number if cursor_pos else None
+            logger.debug(f"Positioning at center of screen {screen_num}")
+            self._position_at_center(screen_num)
+            return
+
+        try:
+            logger.debug("Getting cursor position with screen info...")
+            cursor_pos = get_cursor_position(include_screen_info=True)
+            if cursor_pos is None:
+                logger.warning("Failed to get cursor position, falling back to center positioning")
+                self._position_at_center()
+                return
+            
+            logger.debug(f"Cursor position: x={cursor_pos.x}, y={cursor_pos.y}, "
+                         f"screen={cursor_pos.screen_number}, "
+                         f"screen_geometry=({cursor_pos.screen_x},{cursor_pos.screen_y} {cursor_pos.screen_width}x{cursor_pos.screen_height})")
+            
+            # Update the last cursor position
+            self.last_cursor_position = (cursor_pos.x, cursor_pos.y)
+            
+            # Get available screens
+            screens = QGuiApplication.screens()
+            logger.debug(f"Found {len(screens)} screens")
+            
+            if not screens:
+                logger.warning("No screens found, falling back to center positioning")
+                self._position_at_center()
+                return
+                
+            # Log all screens for debugging
+            for i, screen in enumerate(screens):
+                geom = screen.geometry()
+                logger.debug(f"  Screen {i}: {geom.x()},{geom.y()} {geom.width()}x{geom.height()}")
+                
+            # Find the screen that contains the cursor
+            # Use the screen number from our cursor tracking system since it's already calculated correctly
+            target_screen = None
+            screen_geometry = None
+            
+            if 0 <= cursor_pos.screen_number < len(screens):
+                target_screen = screens[cursor_pos.screen_number]
+                screen_geometry = target_screen.geometry()
+                logger.debug(f"Using screen {cursor_pos.screen_number}: {target_screen.name()} at {screen_geometry}")
+            else:
+                logger.warning(f"Invalid screen number {cursor_pos.screen_number}, searching manually")
+                # Fallback to manual search using absolute cursor coordinates
+                cursor_abs_x = cursor_pos.screen_x + cursor_pos.x
+                cursor_abs_y = cursor_pos.screen_y + cursor_pos.y
+                
+                for screen in screens:
+                    try:
+                        geom = screen.geometry()
+                        if geom.contains(cursor_abs_x, cursor_abs_y):
+                            target_screen = screen
+                            screen_geometry = geom
+                            logger.debug(f"Found cursor on screen: {screen.name()} at {geom}")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Error checking screen {screen.name()}: {e}")
+            
+            # Fall back to primary screen if no screen contains the cursor
+            if target_screen is None or screen_geometry is None:
+                logger.warning("Cursor not found on any screen, falling back to primary screen")
+                target_screen = QGuiApplication.primaryScreen()
+                if target_screen is None:
+                    logger.error("No primary screen available")
+                    return
+                screen_geometry = target_screen.geometry()
+            
+            # Get window dimensions
+            window_size = self.size()
+            if not window_size.isValid() or window_size.width() <= 0 or window_size.height() <= 0:
+                logger.error(f"Invalid window size: {window_size}")
+                return
+                
+            # Calculate the window position relative to the cursor with offset
+            # Convert cursor position to absolute coordinates first
+            cursor_abs_x = cursor_pos.screen_x + cursor_pos.x
+            cursor_abs_y = cursor_pos.screen_y + cursor_pos.y
+            
+            x = cursor_abs_x + self.cursor_offset_x
+            y = cursor_abs_y + self.cursor_offset_y
+            
+            # Get screen boundaries with safe margins
+            screen_left = screen_geometry.x() + 10  # 10px margin
+            screen_top = screen_geometry.y() + 10
+            screen_right = screen_geometry.x() + screen_geometry.width() - 10
+            screen_bottom = screen_geometry.y() + screen_geometry.height() - 10
+            
+            # Adjust position to keep window on screen with margins
+            if x + window_size.width() > screen_right:
+                x = screen_right - window_size.width()
+            if y + window_size.height() > screen_bottom:
+                y = screen_bottom - window_size.height()
+            if x < screen_left:
+                x = screen_left
+            if y < screen_top:
+                y = screen_top
+                
+            # Only reposition if the overlay would actually go off-screen
+            # (removed aggressive 50px threshold repositioning)
+            if x + window_size.width() > screen_right:
+                x = max(screen_left, cursor_abs_x - window_size.width() - abs(self.cursor_offset_x))
+            
+            if y + window_size.height() > screen_bottom:
+                y = max(screen_top, cursor_abs_y - window_size.height() - abs(self.cursor_offset_y))
+            
+            # Final bounds check
+            x = max(screen_left, min(x, screen_right - window_size.width()))
+            y = max(screen_top, min(y, screen_bottom - window_size.height()))
+            
+            # Move the window to the calculated position
+            self.move(int(x), int(y))
+            
+            logger.info(
+                f"Positioning overlay at ({x}, {y}) - "
+                f"Screen {cursor_pos.screen_number} ({target_screen.name() if target_screen else 'unknown'}), "
+                f"Cursor: rel=({cursor_pos.x}, {cursor_pos.y}) abs=({cursor_abs_x}, {cursor_abs_y}), "
+                f"Screen geometry: {screen_geometry.x()},{screen_geometry.y()} {screen_geometry.width()}x{screen_geometry.height()}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in update_position: {e}", exc_info=True)
+            # Fall back to center positioning on any error
+            self._position_at_center()
+    
+    def _position_at_center(self, screen_number: Optional[int] = None, force: bool = False):
+        """Position the window at the bottom center of the specified screen or primary screen.
+        
+        Args:
+            screen_number: The index of the screen to center on. If None, uses the primary screen.
+            force: If True, forces repositioning even if the window is already in a valid position.
+            
+        Returns:
+            bool: True if positioning was successful, False otherwise
+        """
+        logger.debug(f"_position_at_center called with screen_number={screen_number}, force={force}")
+        
+        try:
+            # Get all available screens
+            screens = QGuiApplication.screens()
+            logger.debug(f"Found {len(screens)} screens in total")
+            
+            # Log all screens for debugging
+            for i, scrn in enumerate(screens):
+                geom = scrn.geometry()
+                logger.debug(f"  Screen {i}: {geom.x()},{geom.y()} {geom.width()}x{geom.height()} "
+                            f"(name: {scrn.name()}, model: {scrn.model() if hasattr(scrn, 'model') else 'N/A'})")
+            
+            if not screens:
+                logger.error("No screens found, cannot position window")
+                return False
+            
+            # Get the target screen
+            if screen_number is None or screen_number >= len(screens) or screen_number < 0:
+                logger.debug("Using primary screen (screen_number not specified or invalid)")
+                screen = QGuiApplication.primaryScreen()
+                if screen:
+                    screen_number = screens.index(screen)
+                    logger.debug(f"Primary screen is at index {screen_number}")
+                else:
+                    logger.warning("No primary screen found, using first available screen")
+                    screen = screens[0]
+                    screen_number = 0
+            else:
+                logger.debug(f"Using screen {screen_number} as specified")
+                screen = screens[screen_number]
+            
+            if not screen:
+                logger.error(f"Failed to get screen {screen_number} for positioning")
+                return False
+                
+            # Get both available and full geometry
+            screen_geom = screen.availableGeometry()
+            full_geom = screen.geometry()
+            logger.debug(f"Screen {screen_number} - Available: {screen_geom.x()},{screen_geom.y()} "
+                        f"{screen_geom.width()}x{screen_geom.height()}, Full: {full_geom.x()},{full_geom.y()} "
+                        f"{full_geom.width()}x{full_geom.height()}")
+            
+            window_size = self.size()
+            logger.debug(f"Window size: {window_size.width()}x{window_size.height()}")
+            
+            # Calculate center-bottom position with some margin from bottom
+            x = screen_geom.x() + (screen_geom.width() - window_size.width()) // 2
+            y = screen_geom.y() + screen_geom.height() - window_size.height() - 50  # 50px from bottom
+            
+            # Ensure position is within screen bounds
+            x = max(screen_geom.x(), min(x, screen_geom.x() + screen_geom.width() - window_size.width()))
+            y = max(screen_geom.y(), min(y, screen_geom.y() + screen_geom.height() - window_size.height()))
+            
+            # Get current position for comparison
+            current_pos = self.pos()
+            position_changed = (abs(current_pos.x() - x) >= 2 or abs(current_pos.y() - y) >= 2)
+            
+            # Skip if position hasn't changed and we're not forcing a move
+            if not force and not position_changed:
+                logger.debug("Window already in correct position, skipping move")
+                return True
+            
+            # Log the move operation
+            logger.info(
+                f"Positioning overlay at ({x}, {y}) - "
+                f"Screen {screen_number} ({screen.name() if screen else 'unknown'}), "
+                f"Current: ({current_pos.x()}, {current_pos.y()}), "
+                f"Screen geometry: {screen_geom.x()},{screen_geom.y()} {screen_geom.width()}x{screen_geom.height()}"
+            )
+            
+            # Move the window
+            self.move(x, y)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in _position_at_center: {e}", exc_info=True)
+            
+            # Fallback to primary screen if there's an error
+            try:
+                logger.warning("Attempting fallback to primary screen positioning")
+                primary_screen = QGuiApplication.primaryScreen()
+                if not primary_screen:
+                    logger.error("No primary screen available for fallback positioning")
+                    return False
+                    
+                screen_geom = primary_screen.availableGeometry()
+                window_size = self.size()
+                x = screen_geom.x() + (screen_geom.width() - window_size.width()) // 2
+                y = screen_geom.y() + screen_geom.height() - window_size.height() - 50
+                
+                # Ensure position is within screen bounds
+                x = max(screen_geom.x(), min(x, screen_geom.x() + screen_geom.width() - window_size.width()))
+                y = max(screen_geom.y(), min(y, screen_geom.y() + screen_geom.height() - window_size.height()))
+                
+                logger.warning(
+                    f"Moving to fallback position: ({x}, {y}) on primary screen "
+                    f"(geometry: {screen_geom.x()},{screen_geom.y()} {screen_geom.width()}x{screen_geom.height()})"
+                )
+                
+                self.move(x, y)
+                return True
+                
+            except Exception as fallback_error:
+                logger.error(
+                    f"Critical error in fallback positioning: {fallback_error}", 
+                    exc_info=True
+                )
+                return False
+                
+    def _handle_primary_screen_changed(self, screen):
+        """Handle primary screen change events."""
+        logger.debug(f"Primary screen changed to: {screen.name() if screen else 'None'}")
+        if not self.cursor_relative_positioning:
+            # If we're not in cursor-relative mode, update the position
+            self.update_position()
+    
+    def _handle_screen_changed(self, screen):
+        """Handle screen added/removed events."""
+        logger.debug(f"Screen configuration changed: {screen.name() if screen else 'Unknown screen'}")
+        # Always update position when screens change to ensure we're on a valid screen
+        self.update_position()
+    
+    def showEvent(self, event):
+        """Handle show events to ensure proper positioning."""
+        super().showEvent(event)
+        # Update position when shown to ensure we're on a valid screen
+        self.update_position()
+    
+    def moveEvent(self, event):
+        """Handle move events to ensure we stay on screen."""
+        super().moveEvent(event)
+        if self.cursor_relative_positioning:
+            # If we're in cursor-relative mode, ensure we're still on screen
+            # after the move (in case of screen configuration changes)
+            QTimer.singleShot(0, self._ensure_on_screen)
+    
+    def _ensure_on_screen(self):
+        """Ensure the window is on a visible screen."""
+        try:
+            # Get the geometry of the window
+            window_geom = self.geometry()
+            
+            # Check if the window is on any screen
+            on_screen = False
+            for screen in QGuiApplication.screens():
+                if screen.geometry().intersects(window_geom):
+                    on_screen = True
+                    break
+            
+            # If not on any screen, move to primary screen
+            if not on_screen:
+                logger.warning("Window not on any screen, moving to primary screen")
+                self._position_at_center()
+        except Exception as e:
+            logger.error(f"Error ensuring window is on screen: {e}", exc_info=True)
+            
+    def _should_skip_animation(self, target_pos: QPoint) -> bool:
+        """Determine if we should skip animation for this move.
+        
+        Args:
+            target_pos: The target position to move to
+            
+        Returns:
+            bool: True if animation should be skipped, False otherwise
+        """
+        current_time = time.time() * 1000  # Convert to ms
+        
+        # Skip if we're animating too frequently
+        if (current_time - self._last_animation_time) < self._min_animation_interval:
+            return True
+            
+        # Skip if movement is very small (reduces jitter)
+        if (abs(self._last_position.x() - target_pos.x()) < self._min_movement_threshold and
+            abs(self._last_position.y() - target_pos.y()) < self._min_movement_threshold):
+            return True
+            
+        # Skip if the distance is very small (avoids unnecessary animations)
+        if (abs(self.pos().x() - target_pos.x()) < self._skip_animation_distance and
+            abs(self.pos().y() - target_pos.y()) < self._skip_animation_distance):
+            return True
+            
+        return False
+    
+    def _animate_to_position(self, x: int, y: int):
+        """Animate the window to the specified position.
+        
+        Args:
+            x: Target x-coordinate
+            y: Target y-coordinate
+        """
+        try:
+            target_pos = QPoint(x, y)
+            
+            # If we're already at the target position, do nothing
+            if self.pos() == target_pos:
+                return
+                
+            # Check if we should skip animation for this move
+            if self._should_skip_animation(target_pos):
+                super().move(x, y)
+                self._last_position = target_pos
+                return
+                
+            # If we're already animating, store the target position and let the
+            # animation finish before starting a new one
+            if self._is_animating:
+                self._pending_position = target_pos
+                return
+                
+            # Stop any running animation
+            if self._animation.state() == QPropertyAnimation.State.Running:
+                self._animation.stop()
+                
+            # Set up the animation
+            self._animation.setStartValue(self.pos())
+            self._animation.setEndValue(target_pos)
+            self._is_animating = True
+            
+            # Start the animation
+            self._animation.start()
+            self._last_animation_time = time.time() * 1000  # Update last animation time
+            self._last_position = target_pos
+            
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Animating window from {self.pos().x()},{self.pos().y()} to {x},{y} "
+                    f"(distance: {abs(self.pos().x() - x) + abs(self.pos().y() - y)}px)"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error animating window: {e}", exc_info=True)
+            # Fall back to direct move if animation fails
+            self.move(x, y)
+    
+    def _update_animation_settings(self):
+        """Update animation settings based on current configuration."""
+        self._animation.setDuration(self._animation_duration)
+        self._animation.setEasingCurve(QEasingCurve(self._animation_easing))
+        logger.debug(f"Updated animation settings: duration={self._animation_duration}ms, "
+                   f"easing={self.get_easing_curve_name()}")
+    
+    def set_animation_enabled(self, enabled: bool):
+        """Enable or disable window movement animations.
+        
+        Args:
+            enabled: Whether to enable animations
+        """
+        if self._animation_enabled != enabled:
+            self._animation_enabled = enabled
+            logger.debug(f"Animations {'enabled' if enabled else 'disabled'}")
+    
+    def set_animation_duration(self, duration_ms: int):
+        """Set the animation duration in milliseconds.
+        
+        Args:
+            duration_ms: Duration in milliseconds (50-2000ms)
+        """
+        duration_ms = max(0, min(2000, int(duration_ms)))
+        if self._animation_duration != duration_ms:
+            self._animation_duration = duration_ms
+            self._update_animation_settings()
+    
+    def set_animation_easing(self, easing_curve: str):
+        """Set the animation easing curve.
+        
+        Args:
+            easing_curve: Name of the easing curve (e.g., 'out_quad', 'in_out_cubic')
+        """
+        curve = self._easing_curve_map.get(easing_curve.lower())
+        if curve is not None and self._animation_easing != curve:
+            self._animation_easing = curve
+            self._update_animation_settings()
+    
+    def get_easing_curve_name(self) -> str:
+        """Get the name of the current easing curve.
+        
+        Returns:
+            str: Name of the current easing curve
+        """
+        for name, curve in self._easing_curve_map.items():
+            if curve == self._animation_easing:
+                return name
+        return 'unknown'
+    
+    def _on_animation_finished(self):
+        """Handle animation finished event."""
+        self._is_animating = False
+        
+        # If there's a pending position, animate to it
+        if self._pending_position is not None:
+            pending = self._pending_position
+            self._pending_position = None
+            self._animate_to_position(pending.x(), pending.y())
+    
+    def move(self, x: int, y: int):
+        """Move the window to the specified position with animation if enabled.
+        
+        Args:
+            x: X coordinate
+            y: Y coordinate
+            
+        Note:
+            If animations are enabled, this will smoothly animate to the new position.
+            If animations are disabled or the window isn't visible, it will move instantly.
+        """
+        try:
+            # If animations are disabled, we're not visible, or not in cursor-relative mode, move directly
+            if not self._animation_enabled or not self.isVisible() or not self.cursor_relative_positioning:
+                # Stop any running animation
+                if self._animation.state() == QPropertyAnimation.State.Running:
+                    self._animation.stop()
+                super().move(x, y)
+                return
+                
+            # Otherwise, animate the move
+            self._animate_to_position(x, y)
+            
+        except Exception as e:
+            logger.error(f"Error moving window: {e}", exc_info=True)
+            # Fall back to direct move if there's an error
+            super().move(x, y)
+    
+    def handle_screen_change(self):
+        """Handle screen resolution or configuration changes in a multi-monitor setup.
+        
+        This method is called when the screen configuration changes (e.g., monitor connected/disconnected,
+        resolution changed, etc.). It ensures the overlay window stays properly positioned.
+        """
+        try:
+            # Log the screen change event
+            screens = QGuiApplication.screens()
+            logger.debug(
+                f"Screen configuration changed. Detected {len(screens)} screens. "
+                f"Current window position: {self.x()}, {self.y()}"
+            )
+            
+            # Log details about each screen for debugging
+            for i, screen in enumerate(screens):
+                geom = screen.availableGeometry()
+                logger.debug(
+                    f"  Screen {i}: {screen.name()} - "
+                    f"{geom.width()}x{geom.height()} at ({geom.x()}, {geom.y()})"
+                )
+            
+            # Update the window position
+            if self.cursor_relative_positioning and self.last_cursor_position:
+                # If we were tracking the cursor, try to maintain that relationship
+                self.update_position()
+            else:
+                # Otherwise, just make sure we're on a valid screen
+                self._ensure_on_screen()
+                
+        except Exception as e:
+            logger.error(f"Error handling screen change: {e}", exc_info=True)
+            # Fallback to primary screen if there's an error
+            self._position_at_center(0)
+    
+    def _ensure_on_screen(self):
+        """Ensure the window is visible on at least one screen."""
+        try:
+            screens = QGuiApplication.screens()
+            if not screens:
+                logger.warning("No screens found, cannot ensure window visibility")
+                return
+                
+            window_rect = self.frameGeometry()
+            
+            # Check if the window is on any screen
+            for screen in screens:
+                if screen.availableGeometry().intersects(window_rect):
+                    # Window is on this screen, no need to move it
+                    return
+            
+            # If we get here, the window is not on any screen
+            logger.warning("Window is not on any screen, moving to primary screen")
+            self._position_at_center(0)
+            
+        except Exception as e:
+            logger.error(f"Error ensuring window is on screen: {e}", exc_info=True)
+            # Fallback to primary screen if there's an error
+            self._position_at_center(0)
+    
+    def get_cursor_relative_settings(self) -> dict:
+        """Get current cursor-relative positioning settings.
+        
+        Returns:
+            Dictionary with current settings
+        """
+        return {
+            'enabled': self.cursor_relative_positioning,
+            'offset_x': self.cursor_offset_x,
+            'offset_y': self.cursor_offset_y,
+            'last_cursor_position': self.last_cursor_position
+        }
+    
     def paintEvent(self, event):
         """Handle paint events."""
         try:
@@ -161,6 +1006,11 @@ class OverlayWindow(QWidget):
             # Otherwise draw audio visualization
             else:
                 self.draw_audio_visualization(painter, rect.toRect())
+            
+            # Draw cursor connection indicator
+            if (self.show_cursor_connection and self.cursor_relative_positioning and 
+                self.connection_style != 'none'):
+                self.draw_cursor_connection(painter)
             
             # Draw window title for debugging
             if hasattr(self, 'show_debug') and self.show_debug:
@@ -404,6 +1254,138 @@ class OverlayWindow(QWidget):
             
         except Exception as e:
             logger.error(f"Error in draw_test_pattern: {e}", exc_info=True)
+    
+    def draw_cursor_connection(self, painter: QPainter):
+        """Draw visual connection between overlay and cursor position."""
+        try:
+            # Get current cursor position
+            from nixwhisper.x11_cursor import get_cursor_position
+            cursor_pos = get_cursor_position(include_screen_info=True)
+            if not cursor_pos:
+                return
+            
+            # Calculate absolute cursor position
+            cursor_abs_x = cursor_pos.screen_x + cursor_pos.x
+            cursor_abs_y = cursor_pos.screen_y + cursor_pos.y
+            
+            # Get overlay position and find connection point on overlay edge
+            overlay_pos = self.pos()
+            overlay_rect = self.rect()
+            
+            # Calculate the connection point on the overlay (closest edge to cursor)
+            overlay_center_x = overlay_pos.x() + overlay_rect.width() / 2
+            overlay_center_y = overlay_pos.y() + overlay_rect.height() / 2
+            
+            # Find the best connection point on overlay edge
+            connection_point = self._find_connection_point(
+                overlay_pos.x(), overlay_pos.y(), 
+                overlay_rect.width(), overlay_rect.height(),
+                cursor_abs_x, cursor_abs_y
+            )
+            
+            # Convert connection point to local coordinates for drawing
+            local_x = connection_point[0] - overlay_pos.x()
+            local_y = connection_point[1] - overlay_pos.y()
+            
+            # Calculate direction vector from connection point to cursor
+            dx = cursor_abs_x - connection_point[0]
+            dy = cursor_abs_y - connection_point[1]
+            distance = (dx * dx + dy * dy) ** 0.5
+            
+            if distance < 1:  # Too close, don't draw
+                return
+            
+            # Normalize direction
+            dx /= distance
+            dy /= distance
+            
+            # Apply animation effect
+            alpha = 180
+            if self.connection_animated:
+                # Pulsing effect
+                pulse = math.sin(self._connection_animation_phase * 2 * math.pi)
+                alpha = int(180 + pulse * 50)  # Vary between 130-230
+            
+            # Set up pen for drawing
+            color = QColor(self.connection_color)
+            color.setAlpha(alpha)
+            pen = QPen(color, self.connection_width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            
+            # Draw based on style
+            if self.connection_style == 'line':
+                # Simple line to cursor
+                line_length = min(distance, 100)  # Limit line length
+                end_x = local_x + dx * line_length
+                end_y = local_y + dy * line_length
+                painter.drawLine(QPointF(local_x, local_y), QPointF(end_x, end_y))
+                
+            elif self.connection_style == 'arrow':
+                # Arrow pointing toward cursor
+                arrow_length = min(distance, 60)  # Limit arrow length
+                end_x = local_x + dx * arrow_length
+                end_y = local_y + dy * arrow_length
+                
+                # Draw arrow shaft
+                painter.drawLine(QPointF(local_x, local_y), QPointF(end_x, end_y))
+                
+                # Draw arrow head
+                self._draw_arrow_head(painter, end_x, end_y, dx, dy, self.arrow_size, color)
+                
+        except Exception as e:
+            logger.error(f"Error in draw_cursor_connection: {e}", exc_info=True)
+    
+    def _find_connection_point(self, rect_x, rect_y, rect_width, rect_height, target_x, target_y):
+        """Find the best connection point on rectangle edge toward target."""
+        # Calculate center of rectangle
+        center_x = rect_x + rect_width / 2
+        center_y = rect_y + rect_height / 2
+        
+        # Vector from center to target
+        dx = target_x - center_x
+        dy = target_y - center_y
+        
+        # Find intersection with rectangle edge
+        if abs(dx) / rect_width > abs(dy) / rect_height:
+            # Intersection with left or right edge
+            if dx > 0:  # Right edge
+                edge_x = rect_x + rect_width
+                edge_y = center_y + dy * (rect_width / 2) / abs(dx)
+            else:  # Left edge
+                edge_x = rect_x
+                edge_y = center_y - dy * (rect_width / 2) / abs(dx)
+        else:
+            # Intersection with top or bottom edge
+            if dy > 0:  # Bottom edge
+                edge_x = center_x + dx * (rect_height / 2) / abs(dy)
+                edge_y = rect_y + rect_height
+            else:  # Top edge
+                edge_x = center_x - dx * (rect_height / 2) / abs(dy)
+                edge_y = rect_y
+        
+        # Clamp to rectangle bounds
+        edge_x = max(rect_x, min(rect_x + rect_width, edge_x))
+        edge_y = max(rect_y, min(rect_y + rect_height, edge_y))
+        
+        return (edge_x, edge_y)
+    
+    def _draw_arrow_head(self, painter, x, y, dx, dy, size, color):
+        """Draw an arrow head at the specified position."""
+        # Calculate arrow head points
+        head_angle = math.pi / 6  # 30 degrees
+        
+        # Left arrow head point
+        left_x = x - size * (dx * math.cos(head_angle) - dy * math.sin(head_angle))
+        left_y = y - size * (dy * math.cos(head_angle) + dx * math.sin(head_angle))
+        
+        # Right arrow head point
+        right_x = x - size * (dx * math.cos(head_angle) + dy * math.sin(head_angle))
+        right_y = y - size * (dy * math.cos(head_angle) - dx * math.sin(head_angle))
+        
+        # Draw arrow head lines
+        painter.drawLine(QPointF(x, y), QPointF(left_x, left_y))
+        painter.drawLine(QPointF(x, y), QPointF(right_x, right_y))
                 
     def mousePressEvent(self, event):
         """Allow moving the window by dragging."""
@@ -917,13 +1899,49 @@ class NixWhisperWindow(QMainWindow):
                 self.overlay = OverlayWindow()
                 logger.debug("Overlay window initialized")
                 
-                # Set initial position but don't show it yet
-                screen_geometry = QApplication.primaryScreen().availableGeometry()
+                # Enable cursor positioning by default
+                self.overlay.enable_cursor_relative_positioning(True)
+                self.overlay.set_cursor_offset(40, 40)  # Default offset
+                
+                # Apply overlay config settings if available
+                if hasattr(self.config, 'overlay') and self.config.overlay:
+                    self.overlay.set_cursor_connection_enabled(self.config.overlay.cursor_connection_enabled)
+                    self.overlay.set_cursor_connection_style(self.config.overlay.cursor_connection_style)
+                    self.overlay.set_cursor_connection_animated(self.config.overlay.cursor_connection_animated)
+                    # Convert color string to QColor
+                    try:
+                        color = QColor(self.config.overlay.cursor_connection_color)
+                        if color.isValid():
+                            self.overlay.set_cursor_connection_color(color)
+                    except:
+                        pass  # Use default color if invalid
+                else:
+                    # Enable visual connections by default if no config
+                    self.overlay.set_cursor_connection_enabled(True)
+                    self.overlay.set_cursor_connection_style('arrow')
+                    self.overlay.set_cursor_connection_color(QColor(100, 200, 255, 200))
+                
+                # Set initial size
                 overlay_width = 400
                 overlay_height = 100
-                x = screen_geometry.right() - overlay_width - 20  # 20px from right
-                y = screen_geometry.bottom() - overlay_height - 50  # 50px from bottom
-                self.overlay.setGeometry(x, y, overlay_width, overlay_height)
+                self.overlay.resize(overlay_width, overlay_height)
+                
+                # Force immediate cursor-relative positioning
+                from nixwhisper.x11_cursor import get_cursor_position
+                cursor_pos = get_cursor_position(include_screen_info=True)
+                if cursor_pos:
+                    # Position relative to current cursor position
+                    abs_x = cursor_pos.screen_x + cursor_pos.x
+                    abs_y = cursor_pos.screen_y + cursor_pos.y
+                    x = abs_x + 40  # Use default offset
+                    y = abs_y + 40
+                    self.overlay.setGeometry(x, y, overlay_width, overlay_height)
+                else:
+                    # Fallback to primary screen if cursor tracking fails
+                    screen_geometry = QApplication.primaryScreen().availableGeometry()
+                    x = screen_geometry.right() - overlay_width - 20
+                    y = screen_geometry.bottom() - overlay_height - 50
+                    self.overlay.setGeometry(x, y, overlay_width, overlay_height)
                 
                 # Only show if explicitly requested
                 if show:
@@ -1480,7 +2498,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("NixWhisper Settings")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(450, 400)
         
         # Store parent window reference for config access
         self.parent_window = parent
@@ -1551,6 +2569,55 @@ class SettingsDialog(QDialog):
         silence_group.setLayout(silence_layout)
         layout.addWidget(silence_group)
         
+        # Visual Connection settings
+        visual_layout = QVBoxLayout()
+        
+        # Enable/disable visual connection
+        self.visual_enable_cb = QCheckBox("Show cursor connection indicator")
+        # Load from config if available, otherwise use default
+        if hasattr(self.parent_window.config, 'overlay'):
+            self.visual_enable_cb.setChecked(self.parent_window.config.overlay.cursor_connection_enabled)
+        else:
+            self.visual_enable_cb.setChecked(True)
+        visual_layout.addWidget(self.visual_enable_cb)
+        
+        # Connection style selector
+        style_layout = QHBoxLayout()
+        style_layout.addWidget(QLabel("Style:"))
+        self.style_combo = QComboBox()
+        self.style_combo.addItems(['arrow', 'line', 'none'])
+        if hasattr(self.parent_window.config, 'overlay'):
+            current_style = self.parent_window.config.overlay.cursor_connection_style
+            index = self.style_combo.findText(current_style)
+            if index >= 0:
+                self.style_combo.setCurrentIndex(index)
+        style_layout.addWidget(self.style_combo)
+        visual_layout.addLayout(style_layout)
+        
+        # Color picker (simplified as a text input for now)
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(QLabel("Color:"))
+        self.color_input = QLineEdit()
+        if hasattr(self.parent_window.config, 'overlay'):
+            self.color_input.setText(self.parent_window.config.overlay.cursor_connection_color)
+        else:
+            self.color_input.setText("#64c8ff")
+        self.color_input.setPlaceholderText("#RRGGBB or color name")
+        color_layout.addWidget(self.color_input)
+        visual_layout.addLayout(color_layout)
+        
+        # Animation toggle
+        self.animation_cb = QCheckBox("Animate connection indicator")
+        if hasattr(self.parent_window.config, 'overlay'):
+            self.animation_cb.setChecked(self.parent_window.config.overlay.cursor_connection_animated)
+        else:
+            self.animation_cb.setChecked(True)
+        visual_layout.addWidget(self.animation_cb)
+        
+        visual_group = QGroupBox("Visual Connection")
+        visual_group.setLayout(visual_layout)
+        layout.addWidget(visual_group)
+        
         # Button box
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.accept)
@@ -1558,6 +2625,40 @@ class SettingsDialog(QDialog):
         layout.addWidget(button_box)
         
         self.setLayout(layout)
+    
+    def accept(self):
+        """Override accept to save visual connection settings."""
+        # Save visual connection settings to config
+        if not hasattr(self.parent_window.config, 'overlay'):
+            # If overlay config doesn't exist, create it
+            from nixwhisper.config import OverlayConfig
+            self.parent_window.config.overlay = OverlayConfig()
+        
+        # Update config with UI values
+        self.parent_window.config.overlay.cursor_connection_enabled = self.visual_enable_cb.isChecked()
+        self.parent_window.config.overlay.cursor_connection_style = self.style_combo.currentText()
+        self.parent_window.config.overlay.cursor_connection_color = self.color_input.text()
+        self.parent_window.config.overlay.cursor_connection_animated = self.animation_cb.isChecked()
+        
+        # Apply settings to overlay if it exists
+        if hasattr(self.parent_window, 'overlay') and self.parent_window.overlay:
+            self.parent_window.overlay.set_cursor_connection_enabled(self.visual_enable_cb.isChecked())
+            self.parent_window.overlay.set_cursor_connection_style(self.style_combo.currentText())
+            # Convert color string to QColor
+            color_text = self.color_input.text()
+            if color_text:
+                try:
+                    color = QColor(color_text)
+                    if color.isValid():
+                        self.parent_window.overlay.set_cursor_connection_color(color)
+                except:
+                    pass  # Keep current color if invalid
+            self.parent_window.overlay.set_cursor_connection_animated(self.animation_cb.isChecked())
+        
+        # Update hotkey setting
+        self.parent_window.config.ui.hotkey = self.hotkey_input.text()
+        
+        super().accept()
     
     def toggle_silence_detection(self, state):
         """Toggle silence detection on/off."""
